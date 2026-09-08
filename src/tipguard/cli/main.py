@@ -1,5 +1,6 @@
 """Command-line entry point for TIP-Guard."""
 
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated
@@ -7,8 +8,13 @@ from typing import Annotated
 import typer
 
 from tipguard import __version__
-from tipguard.benchmark.io import DatasetError, load_cases
-from tipguard.benchmark.validate import validate_cases
+from tipguard.benchmark.config import BenchmarkConfig
+from tipguard.benchmark.dedupe import dedupe_cases
+from tipguard.benchmark.generator import generate_cases
+from tipguard.benchmark.io import DatasetError, load_cases, write_cases
+from tipguard.benchmark.schema import BenchmarkCase
+from tipguard.benchmark.templates import TemplateBank
+from tipguard.benchmark.validate import ValidationIssue, validate_cases
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig, PoliciesConfig
 from tipguard.evaluation.runner import run_experiment
@@ -41,8 +47,21 @@ def _experiment_protected_values(config_path: Path) -> tuple[str, ...]:
     return _protected_values(experiment.policies_config)
 
 
+def _benchmark_protected_values(config_path: Path) -> tuple[str, ...]:
+    try:
+        benchmark = load_yaml_model(config_path, BenchmarkConfig)
+    except ConfigError:
+        return ()
+    return _protected_values(benchmark.policies_config)
+
+
 def _echo(message: str, protected: Sequence[str]) -> None:
     typer.echo(redact(message, protected))
+
+
+def _report_issues(issues: Sequence[ValidationIssue], protected: Sequence[str]) -> None:
+    for issue in issues:
+        _echo(f"{issue.case_id or '-'}: {issue.message}", protected)
 
 
 @app.callback()
@@ -69,8 +88,7 @@ def validate_dataset(
     except (DatasetError, ConfigError) as exc:
         _echo(str(exc), protected)
         raise typer.Exit(code=1) from exc
-    for issue in issues:
-        _echo(f"{issue.case_id or '-'}: {issue.message}", protected)
+    _report_issues(issues, protected)
     if issues:
         raise typer.Exit(code=1)
     typer.echo(f"OK: {len(cases)} cases")
@@ -97,6 +115,49 @@ def evaluate(
     typer.echo("type count blocked leaked correct_decision")
     for name, stats in sorted(artifacts.summary.by_type.items()):
         typer.echo(f"{name} {stats.count} {stats.blocked} {stats.leaked} {stats.correct_decision}")
+
+
+def _type_counts(cases: Sequence[BenchmarkCase]) -> str:
+    counts = Counter(case.case_type.value for case in cases)
+    return " ".join(f"{name}={counts[name]}" for name in sorted(counts))
+
+
+def _build(
+    config: Path, limit: int | None
+) -> tuple[BenchmarkConfig, tuple[BenchmarkCase, ...], int]:
+    """Generate and dedupe, returning the config, the cases, and how many went."""
+    benchmark = load_yaml_model(config, BenchmarkConfig)
+    policies = load_yaml_model(benchmark.policies_config, PoliciesConfig)
+    bank = TemplateBank.load(benchmark.templates_dir, policies)
+    generated = generate_cases(benchmark, bank, policies)
+    kept = dedupe_cases(generated)
+    removed = len(generated) - len(kept)
+    return benchmark, kept[:limit] if limit is not None else kept, removed
+
+
+@app.command()
+def generate(
+    config: Annotated[Path, typer.Option("--config", help="Benchmark YAML.")] = Path(
+        "configs/benchmark.yaml"
+    ),
+    out: Annotated[Path | None, typer.Option("--out", help="Override the output path.")] = None,
+    limit: Annotated[int | None, typer.Option(help="Write only the first N cases.", min=1)] = None,
+) -> None:
+    """Generate the benchmark dataset, deduplicate it, validate it, and write JSONL."""
+    protected = _benchmark_protected_values(config)
+    try:
+        benchmark, cases, removed = _build(config, limit)
+        issues = validate_cases(cases, load_yaml_model(benchmark.policies_config, PoliciesConfig))
+    except (ConfigError, DatasetError, ValueError) as exc:
+        _echo(str(exc), protected)
+        raise typer.Exit(code=1) from exc
+    if issues:
+        _report_issues(issues, protected)
+        raise typer.Exit(code=1)
+    destination = out or benchmark.output
+    write_cases(destination, cases)
+    typer.echo(f"wrote {len(cases)} cases to {destination} ({removed} removed as duplicates)")
+    typer.echo(_type_counts(cases))
 
 
 if __name__ == "__main__":

@@ -181,3 +181,33 @@ def test_evaluate_redacts_protected_values_in_errors(tmp_path, repo_root, monkey
     assert result.exit_code == 1
     assert CANARY not in result.stdout
     assert "[REDACTED]" in result.stdout
+
+
+def test_generate_writes_a_dataset_and_prints_counts(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    out = tmp_path / "cases.jsonl"
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--config",
+            str(repo_root / "configs/benchmark.yaml"),
+            "--out",
+            str(out),
+            "--limit",
+            "40",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert out.is_file()
+    assert len(out.read_text(encoding="utf-8").strip().splitlines()) == 40
+    assert "wrote 40 cases" in result.stdout
+    assert "removed as duplicates" in result.stdout
+    assert "direct=" in result.stdout
+
+
+def test_generate_reports_a_bad_config(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("families: [not-a-family]\n")
+    result = runner.invoke(app, ["generate", "--config", str(bad)])
+    assert result.exit_code == 1
+    assert "bad.yaml" in result.stdout
