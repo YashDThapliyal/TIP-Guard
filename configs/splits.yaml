@@ -1,0 +1,33 @@
+# Split assignment settings. Every default in SplitConfig is written out here
+# on purpose: which conditions were held out is the central claim of the
+# study, so it should be readable in one file rather than inferred from code.
+seed: 20260907
+
+# Proportions of the standard pool, i.e. everything no held-out rule claimed.
+train: 0.6
+dev: 0.1
+test: 0.3
+
+# Families withheld entirely, in every case type. Morse and code are both
+# mechanically decodable and visually unlike the remaining families, so a
+# defense that handles them without having seen them is generalizing rather
+# than pattern-matching a known alphabet.
+heldout_families:
+  - morse
+  - code
+
+# The one policy whose cases are all withheld, so cross-policy transfer can be
+# measured without retraining.
+heldout_policy: protect-launch-codename
+
+# How many of each intent's trailing phrasing indices are withheld. The
+# indices themselves are read off the dataset, so regenerating with more
+# paraphrases moves the boundary automatically.
+heldout_phrasing_count: 4
+
+# Multi-step orderings withheld, read as [inner, outer]. Both halves of each
+# pair appear on their own in training, so what is withheld is the
+# composition, not the families.
+heldout_multi_step_pairs:
+  - [caesar, base64]
+  - [substitution, reverse]

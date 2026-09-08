@@ -14,6 +14,7 @@ reasoning tasks.
 - [`docs/threat-model.md`](docs/threat-model.md) defines the protected assets, the attacker, and what counts as a policy violation.
 - [`docs/safety-protocol.md`](docs/safety-protocol.md) sets the rules for synthetic data, code safety, logging, and release.
 - [`docs/research-questions.md`](docs/research-questions.md) states the primary question and hypotheses H1 to H5.
+- [`docs/dataset-card.md`](docs/dataset-card.md) describes `tipguard-v1`: composition, splits, labeling, the gold review, limitations, and the dataset hash.
 
 ## Requirements
 
@@ -57,6 +58,33 @@ than the default `configs/policies.yaml` (every `policy_id` in the dataset must 
 ```bash
 uv run tipguard validate-dataset data/generated/smoke.jsonl --policies configs/policies.yaml
 ```
+
+Build the benchmark dataset. `generate` is deterministic from the seed in
+`configs/benchmark.yaml`; `split` assigns the seven split conditions, rewrites the dataset in
+place, and writes one manifest per split to `data/splits/`:
+
+```bash
+uv run tipguard generate
+uv run tipguard split
+```
+
+Describe a dataset — counts by case type crossed with transformation and with difficulty, counts
+by split, the total, and the file's sha256, all as Markdown:
+
+```bash
+uv run tipguard dataset-stats
+```
+
+Draw the gold subset a reviewer reads. The sample is reproducible, stratified by (case type,
+transformation, difficulty), and covers every stratum:
+
+```bash
+uv run tipguard sample-gold --out data/labels/gold-sample.jsonl
+```
+
+Verdicts for the current sample are recorded in `data/labels/gold-review.jsonl`, one
+`GoldReview` per line. See [`docs/dataset-card.md`](docs/dataset-card.md) for the results and
+for who did the reviewing.
 
 Run an experiment configuration end to end:
 

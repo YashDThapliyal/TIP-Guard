@@ -181,3 +181,256 @@ def test_evaluate_redacts_protected_values_in_errors(tmp_path, repo_root, monkey
     assert result.exit_code == 1
     assert CANARY not in result.stdout
     assert "[REDACTED]" in result.stdout
+
+
+def test_generate_writes_a_dataset_and_prints_counts(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    out = tmp_path / "cases.jsonl"
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--config",
+            str(repo_root / "configs/benchmark.yaml"),
+            "--out",
+            str(out),
+            "--limit",
+            "40",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert out.is_file()
+    assert len(out.read_text(encoding="utf-8").strip().splitlines()) == 40
+    assert "wrote 40 cases" in result.stdout
+    assert "removed as duplicates" in result.stdout
+    assert "direct=" in result.stdout
+
+
+def test_generate_reports_a_bad_config(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("families: [not-a-family]\n")
+    result = runner.invoke(app, ["generate", "--config", str(bad)])
+    assert result.exit_code == 1
+    assert "bad.yaml" in result.stdout
+
+
+def test_generate_reports_an_unwritable_output_path(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    directory = tmp_path / "already-a-directory"
+    directory.mkdir()
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--config",
+            str(repo_root / "configs/benchmark.yaml"),
+            "--out",
+            str(directory),
+            "--limit",
+            "5",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "already-a-directory" in result.stdout
+    assert "cannot write" in result.stdout
+
+
+def _split_dataset(tmp_path, repo_root):  # type: ignore[no-untyped-def]
+    """A private copy of the shipped dataset, safe to rewrite in place."""
+    import shutil
+
+    destination = tmp_path / "dataset.jsonl"
+    shutil.copyfile(repo_root / "data/generated/tipguard-v1.jsonl", destination)
+    return destination
+
+
+def test_split_writes_manifests_and_rewrites_the_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    import json
+
+    from tipguard.benchmark.io import load_cases
+
+    dataset = _split_dataset(tmp_path, repo_root)
+    out_dir = tmp_path / "splits"
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(dataset),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "heldout_transformation" in result.stdout
+    cases = load_cases(dataset)
+    assert {case.split.value for case in cases} > {"test"}
+    manifest = json.loads((out_dir / "heldout_transformation.json").read_text(encoding="utf-8"))
+    assert manifest["count"] == len(manifest["case_ids"]) > 0
+    assert (out_dir / "README.md").is_file()
+
+
+def test_split_reports_a_bad_config(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    bad = tmp_path / "bad-splits.yaml"
+    bad.write_text("train: 0.5\ndev: 0.1\ntest: 0.3\n")
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(repo_root / "data/generated/smoke.jsonl"),
+            "--config",
+            str(bad),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "bad-splits.yaml" in result.stdout
+
+
+def test_split_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(tmp_path / "missing.jsonl"),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "missing.jsonl" in result.stdout
+
+
+def test_split_reports_an_unwritable_out_dir(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    blocked = tmp_path / "already-a-file"
+    blocked.write_text("")
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(_split_dataset(tmp_path, repo_root)),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(blocked),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "already-a-file" in result.stdout
+    assert "cannot write" in result.stdout
+
+
+def test_split_redacts_with_the_policies_it_is_given(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    """A dataset generated from custom policies must not have its protected
+    value printed just because the standard policies file does not list it."""
+    policies = tmp_path / "custom-policies.yaml"
+    policies.write_text(
+        "policies:\n"
+        "  - policy_id: protect-thing\n"
+        "    description: d\n"
+        "    categories: [c]\n"
+        "    protected_values: [SUPER-SECRET-VALUE]\n"
+        "    protected_label: thing\n"
+    )
+    dataset = tmp_path / "broken.jsonl"
+    dataset.write_text('{"case_id": "x", "prompt": "SUPER-SECRET-VALUE"}\n')
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(dataset),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(tmp_path / "splits"),
+            "--policies",
+            str(policies),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "SUPER-SECRET-VALUE" not in result.stdout
+    assert "[REDACTED]" in result.stdout
+
+
+def test_sample_gold_writes_the_subset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    from tipguard.benchmark.io import load_cases
+
+    out = tmp_path / "sample.jsonl"
+    result = runner.invoke(
+        app,
+        [
+            "sample-gold",
+            "--dataset",
+            str(repo_root / "data/generated/tipguard-v1.jsonl"),
+            "--out",
+            str(out),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    written = load_cases(out)
+    assert len(written) >= 170
+    assert f"wrote {len(written)} of 10% sample" in result.stdout
+    assert "tip=" in result.stdout
+
+
+def test_sample_gold_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "sample-gold",
+            "--dataset",
+            str(tmp_path / "absent.jsonl"),
+            "--out",
+            str(tmp_path / "sample.jsonl"),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "file not found" in result.stdout
+
+
+def test_dataset_stats_prints_tables_that_total_the_case_count(repo_root) -> None:  # type: ignore[no-untyped-def]
+    from tipguard.benchmark.io import load_cases
+    from tipguard.benchmark.stats import dataset_sha256
+
+    dataset = repo_root / "data/generated/tipguard-v1.jsonl"
+    cases = load_cases(dataset)
+    result = runner.invoke(
+        app,
+        [
+            "dataset-stats",
+            "--dataset",
+            str(dataset),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "### Case type by transformation" in result.stdout
+    assert "| split | cases | expect block | expect allow |" in result.stdout
+    assert f"total: {len(cases)}" in result.stdout
+    assert f"sha256: {dataset_sha256(dataset)}" in result.stdout
+    totals = [line for line in result.stdout.splitlines() if line.startswith("| total |")]
+    assert all(line.rstrip().endswith(f"{len(cases)} |") for line in totals)
+    assert len(totals) == 2
+
+
+def test_dataset_stats_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "dataset-stats",
+            "--dataset",
+            str(tmp_path / "absent.jsonl"),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "file not found" in result.stdout
