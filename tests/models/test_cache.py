@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from tipguard.models.cache import CachedProvider, ResponseCache, cache_key
@@ -23,6 +24,15 @@ def test_cache_key_depends_on_request_and_model() -> None:
     assert a == cache_key("mock", "m", ModelRequest.simple("x"))
 
 
+def test_cache_key_depends_on_namespace() -> None:
+    request = ModelRequest.simple("x")
+    a = cache_key("mock", "m", request, namespace="http://a")
+    b = cache_key("mock", "m", request, namespace="http://b")
+    default = cache_key("mock", "m", request)
+    assert len({a, b, default}) == 3
+    assert cache_key("mock", "m", request, namespace="") == default
+
+
 def test_cached_provider_hits_after_first_call(tmp_path: Path) -> None:
     inner = CountingProvider()
     provider = CachedProvider(inner, ResponseCache(tmp_path / "c.sqlite"))
@@ -40,3 +50,38 @@ def test_cache_persists_across_instances(tmp_path: Path) -> None:
     inner = CountingProvider()
     CachedProvider(inner, ResponseCache(path)).complete(ModelRequest.simple("z"))
     assert inner.calls == 0
+
+
+def test_cached_provider_namespaces_do_not_share_entries(tmp_path: Path) -> None:
+    cache = ResponseCache(tmp_path / "c.sqlite")
+    inner_a = CountingProvider()
+    inner_b = CountingProvider()
+    provider_a = CachedProvider(inner_a, cache, namespace="http://a")
+    provider_b = CachedProvider(inner_b, cache, namespace="http://b")
+    provider_a.complete(ModelRequest.simple("same"))
+    provider_b.complete(ModelRequest.simple("same"))
+    assert inner_a.calls == 1
+    assert inner_b.calls == 1
+
+
+def test_cache_get_returns_none_for_corrupt_row_and_provider_is_called(tmp_path: Path) -> None:
+    path = tmp_path / "c.sqlite"
+    cache = ResponseCache(path)
+    inner = CountingProvider()
+    provider = CachedProvider(inner, cache)
+    key = cache_key(inner.name, inner.model, ModelRequest.simple("hello"))
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT OR REPLACE INTO responses (key, value) VALUES (?, ?)", (key, "not valid json")
+    )
+    conn.commit()
+    conn.close()
+    assert cache.get(key) is None
+    response = provider.complete(ModelRequest.simple("hello"))
+    assert inner.calls == 1
+    assert response.cached is False
+
+
+def test_response_cache_close_does_not_raise(tmp_path: Path) -> None:
+    cache = ResponseCache(tmp_path / "c.sqlite")
+    cache.close()

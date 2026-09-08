@@ -1,13 +1,30 @@
-"""Anthropic Messages API provider."""
+"""Anthropic Messages API provider.
+
+Note: the locked `anthropic` SDK's `Messages.create()` has no `temperature`
+parameter (sampling controls were removed from the API for current Claude
+models), so `request.temperature` is intentionally ignored here.
+"""
 
 import time
 from typing import Any
 
 from tipguard.config.schemas import ModelSpec
 from tipguard.models.pricing import estimate_cost
-from tipguard.models.types import ModelRequest, ModelResponse, ProviderError
+from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, ProviderError
 
-JSON_INSTRUCTION = "\nRespond with a single JSON object and nothing else."
+ChatMessage = dict[str, str]
+
+
+def _append_to_last_user(messages: list[ChatMessage]) -> list[ChatMessage]:
+    target_index = next(
+        (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"), None
+    )
+    if target_index is None:
+        return messages
+    updated = messages[target_index]
+    new_messages = list(messages)
+    new_messages[target_index] = {**updated, "content": updated["content"] + JSON_INSTRUCTION}
+    return new_messages
 
 
 class AnthropicProvider:
@@ -27,12 +44,16 @@ class AnthropicProvider:
         return self._client
 
     def complete(self, request: ModelRequest) -> ModelResponse:
+        has_system = any(m.role == "system" for m in request.messages)
         system = "\n".join(m.content for m in request.messages if m.role == "system")
-        if request.response_format == "json":
-            system = system + JSON_INSTRUCTION
         messages = [
             {"role": m.role, "content": m.content} for m in request.messages if m.role != "system"
         ]
+        if request.response_format == "json":
+            if has_system:
+                system = system + JSON_INSTRUCTION
+            else:
+                messages = _append_to_last_user(messages)
         started = time.perf_counter()
         try:
             result = self.client.messages.create(
@@ -40,7 +61,6 @@ class AnthropicProvider:
                 system=system,
                 messages=messages,
                 max_tokens=request.max_tokens,
-                temperature=request.temperature,
             )
         except Exception as exc:
             raise ProviderError(f"{self.name}/{self.model}: {exc}") from exc

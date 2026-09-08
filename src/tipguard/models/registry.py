@@ -30,8 +30,9 @@ class ProviderRegistry:
 
     def get(self, alias: str) -> ModelProvider:
         if alias not in self._providers:
-            provider = build_provider(self.spec(alias))
+            spec = self.spec(alias)
+            provider = build_provider(spec)
             if self._cache is not None:
-                provider = CachedProvider(provider, self._cache)
+                provider = CachedProvider(provider, self._cache, namespace=spec.base_url or "")
             self._providers[alias] = provider
         return self._providers[alias]

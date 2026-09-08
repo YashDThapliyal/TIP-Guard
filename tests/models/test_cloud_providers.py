@@ -49,8 +49,27 @@ def test_openai_provider_maps_request_and_cost() -> None:
     assert resp.text == "ok" and resp.input_tokens == 5 and resp.output_tokens == 2
     assert resp.cost_usd == pytest.approx(7 / 1_000_000)
     call = client.calls[0]
-    assert call["messages"][0] == {"role": "system", "content": "s"}
+    assert call["messages"][0]["role"] == "system"
+    assert call["messages"][0]["content"].startswith("s")
+    assert "JSON" in call["messages"][0]["content"]
     assert call["response_format"] == {"type": "json_object"}
+
+
+def test_openai_provider_json_instruction_targets_last_user_when_no_system() -> None:
+    spec = ModelSpec(provider="openai", model="m")
+    client = FakeOpenAIClient()
+    OpenAIProvider(spec, client=client).complete(ModelRequest.simple("q", response_format="json"))
+    call = client.calls[0]
+    assert call["messages"][-1]["role"] == "user"
+    assert "JSON" in call["messages"][-1]["content"]
+
+
+def test_openai_provider_no_json_instruction_in_text_mode() -> None:
+    spec = ModelSpec(provider="openai", model="m")
+    client = FakeOpenAIClient()
+    OpenAIProvider(spec, client=client).complete(ModelRequest.simple("q", system="s"))
+    call = client.calls[0]
+    assert all("JSON" not in m["content"] for m in call["messages"])
 
 
 def test_openai_provider_wraps_errors() -> None:
@@ -70,3 +89,23 @@ def test_anthropic_provider_maps_system_and_text_blocks() -> None:
     assert call["system"].startswith("s")
     assert "JSON" in call["system"]
     assert call["messages"] == [{"role": "user", "content": "q"}]
+
+
+def test_anthropic_provider_omits_temperature() -> None:
+    spec = ModelSpec(provider="anthropic", model="m")
+    client = FakeAnthropicClient()
+    AnthropicProvider(spec, client=client).complete(ModelRequest.simple("q"))
+    call = client.calls[0]
+    assert "temperature" not in call
+    assert set(call) == {"model", "system", "messages", "max_tokens"}
+
+
+def test_anthropic_provider_json_instruction_targets_last_user_when_no_system() -> None:
+    spec = ModelSpec(provider="anthropic", model="m")
+    client = FakeAnthropicClient()
+    AnthropicProvider(spec, client=client).complete(
+        ModelRequest.simple("q", response_format="json")
+    )
+    call = client.calls[0]
+    assert call["system"] == ""
+    assert "JSON" in call["messages"][-1]["content"]

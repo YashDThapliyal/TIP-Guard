@@ -20,8 +20,8 @@ models:
   claude-sonnet-5:
     provider: anthropic
     model: claude-sonnet-5
-    input_cost_per_million: 3.00
-    output_cost_per_million: 15.00
+    input_cost_per_million: 2.00
+    output_cost_per_million: 10.00
   ollama-qwen2.5-7b:
     provider: ollama
     model: qwen2.5:7b

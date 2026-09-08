@@ -5,7 +5,24 @@ from typing import Any
 
 from tipguard.config.schemas import ModelSpec
 from tipguard.models.pricing import estimate_cost
-from tipguard.models.types import ModelRequest, ModelResponse, ProviderError
+from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, ProviderError
+
+ChatMessage = dict[str, str]
+
+
+def _with_json_instruction(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Append JSON_INSTRUCTION to the system message, or the last user message if none."""
+    target_index = next((i for i, m in enumerate(messages) if m["role"] == "system"), None)
+    if target_index is None:
+        target_index = next(
+            (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"), None
+        )
+    if target_index is None:
+        return messages
+    updated = messages[target_index]
+    new_messages = list(messages)
+    new_messages[target_index] = {**updated, "content": updated["content"] + JSON_INSTRUCTION}
+    return new_messages
 
 
 class OpenAIProvider:
@@ -28,13 +45,17 @@ class OpenAIProvider:
         return self._client
 
     def complete(self, request: ModelRequest) -> ModelResponse:
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        is_json = request.response_format == "json"
+        if is_json:
+            messages = _with_json_instruction(messages)
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+            "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
-        if request.response_format == "json":
+        if is_json:
             kwargs["response_format"] = {"type": "json_object"}
         started = time.perf_counter()
         try:

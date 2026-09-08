@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict
 
 Role = Literal["system", "user", "assistant"]
 
+JSON_INSTRUCTION = "\nRespond with a single JSON object and nothing else."
+
 
 class Message(BaseModel):
     model_config = ConfigDict(frozen=True)
