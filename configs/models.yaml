@@ -1,0 +1,28 @@
+# Model registry. Aliases (keys) are what experiments reference. Prices are USD per 1M tokens
+# and are estimates for cost reporting only.
+models:
+  mock-main:
+    provider: mock
+    model: mock-echo
+  mock-judge:
+    provider: mock
+    model: mock-judge
+  gpt-4o-mini:
+    provider: openai
+    model: gpt-4o-mini
+    input_cost_per_million: 0.15
+    output_cost_per_million: 0.60
+  claude-haiku-4-5:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    input_cost_per_million: 1.00
+    output_cost_per_million: 5.00
+  claude-sonnet-5:
+    provider: anthropic
+    model: claude-sonnet-5
+    input_cost_per_million: 3.00
+    output_cost_per_million: 15.00
+  ollama-qwen2.5-7b:
+    provider: ollama
+    model: qwen2.5:7b
+    base_url: http://localhost:11434/v1
