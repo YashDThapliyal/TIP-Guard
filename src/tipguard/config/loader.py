@@ -14,7 +14,11 @@ def load_yaml_model[T: BaseModel](path: Path, model: type[T]) -> T:
     if not path.is_file():
         raise ConfigError(f"{path}: file not found")
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"{path}: cannot read file: {exc}") from exc
+    try:
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path}: invalid YAML: {exc}") from exc
     if raw is None:

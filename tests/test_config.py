@@ -60,3 +60,20 @@ def test_models_are_frozen(repo_root: Path) -> None:
     cfg = load_yaml_model(repo_root / "configs" / "models.yaml", ModelsConfig)
     with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError on frozen instance
         cfg.models["mock-main"].model = "other"  # type: ignore[misc]
+
+
+def test_malformed_yaml_syntax_raises_config_error(tmp_path: Path) -> None:
+    p = tmp_path / "malformed.yaml"
+    p.write_text("name: [unclosed")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, ExperimentConfig)
+    assert "malformed.yaml" in str(exc.value)
+    assert "invalid YAML" in str(exc.value)
+
+
+def test_unreadable_file_raises_config_error(tmp_path: Path) -> None:
+    p = tmp_path / "invalid_utf8.yaml"
+    p.write_bytes(b"\xff\xfe")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, ExperimentConfig)
+    assert "invalid_utf8.yaml" in str(exc.value)
