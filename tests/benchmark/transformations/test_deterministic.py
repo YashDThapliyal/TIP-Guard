@@ -1,6 +1,7 @@
 """Round-trip and determinism tests for the deterministic transformation encoders."""
 
 import random
+from itertools import pairwise
 
 import pytest
 
@@ -236,3 +237,25 @@ def test_reverse_known_output() -> None:
     encoded = transformation.encode("abc def", random.Random(0))
 
     assert encoded.payload == "fed cba"
+
+
+def test_no_registry_hint_repeats_a_word() -> None:
+    """Hints are read aloud inside level 1 and 2 wrappers, so a hint that
+    doubles a word ("replaced by symbols symbols") shows up in every prompt
+    for that family."""
+    rng = random.Random(0)
+    for family, transformation in TRANSFORMATIONS.items():
+        hint = transformation.encode(GENERAL_TEXT, rng).hint
+        words = hint.lower().split()
+        for first, second in pairwise(words):
+            assert first != second, (family, hint)
+
+
+def test_substitution_hint_names_the_glyphs_it_used() -> None:
+    rng = random.Random(0)
+    encoded = TRANSFORMATIONS[Family.SUBSTITUTION].encode(GENERAL_TEXT, rng)
+    assert encoded.hint in (
+        "text with letters replaced by digits",
+        "text with letters replaced by symbols",
+    )
+    assert encoded.params["map"] in ("leet", "symbols")

@@ -10,6 +10,13 @@ SUBSTITUTION_MAPS: dict[str, dict[str, str]] = {
 }
 
 
+#: How each map is described in the human-readable hint. The map NAMES are
+#: part of `Encoded.params` and of the blind decoder's interface, so they stay
+#: as they are; these are only for the sentence the reader sees, where
+#: "replaced by symbols symbols" would otherwise double the word.
+MAP_DESCRIPTIONS: dict[str, str] = {"leet": "digits", "symbols": "symbols"}
+
+
 def _literal_indices(text: str, char_map: dict[str, str]) -> list[int]:
     """Indices whose source character is already a map glyph, not a map key.
 
@@ -77,7 +84,7 @@ class SubstitutionTransformation:
                 "literals": _format_literals(literals),
                 "ambiguous": "true" if literals else "false",
             },
-            hint=f"text with letters replaced by {name} symbols",
+            hint=f"text with letters replaced by {MAP_DESCRIPTIONS[name]}",
         )
 
     def decode(self, encoded: Encoded) -> str:

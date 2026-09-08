@@ -287,7 +287,7 @@ def _check_intent_hints_cover_policies(
     path: Path, wrappers: "DifficultyWrappers", policies: PoliciesConfig
 ) -> None:
     """Every goal category a policy can present, plus benign, needs a clause."""
-    needed = {policy.categories[0] for policy in policies.policies if policy.categories}
+    needed = {category for policy in policies.policies for category in policy.categories}
     needed.add(BENIGN_CATEGORY)
     missing = sorted(needed - set(wrappers.intent_hints))
     if missing:

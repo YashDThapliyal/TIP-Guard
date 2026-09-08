@@ -57,9 +57,16 @@ def _check_allowed(values: Sequence[object], field: str) -> None:
     """Non-empty, duplicate-free, and drawn only from the allowed set."""
     if not values:
         raise ValueError(f"{field} must not be empty")
-    seen: set[object] = set()
+    seen: set[str | int] = set()
     allowed = ALLOWED_VALUES[field]
     for value in values:
+        # A nested list or mapping is unhashable, so it must be rejected here:
+        # reaching the membership test with one raises TypeError, which escapes
+        # pydantic as a traceback instead of a file-named ConfigError.
+        if isinstance(value, bool) or not isinstance(value, str | int):
+            raise ValueError(
+                f"{field} expects a plain string or number, not {type(value).__name__}: {value!r}"
+            )
         if value in seen:
             raise ValueError(f"{field} lists {value!r} more than once")
         if value not in allowed:
@@ -92,6 +99,6 @@ class BenchmarkConfig(FrozenModel):
     def _drawn_from_the_allowed_set(cls, value: object, info: ValidationInfo) -> object:
         """Checked before coercion, so the message can name the offending value
         rather than only the values that would have been acceptable."""
-        if isinstance(value, list):
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
             _check_allowed(value, str(info.field_name))
         return value

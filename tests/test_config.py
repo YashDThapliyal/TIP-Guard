@@ -236,3 +236,32 @@ def test_benchmark_config_rejects_an_empty_list(tmp_path: Path, field: str) -> N
         load_yaml_model(p, BenchmarkConfig)
     assert field in str(exc.value)
     assert "must not be empty" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "families:\n  - [base64]\n",
+        "families:\n  - base64: yes\n",
+        "difficulties:\n  - [1]\n",
+        "framings:\n  - {id: first-person}\n",
+    ],
+)
+def test_benchmark_config_rejects_a_nested_collection(tmp_path: Path, body: str) -> None:
+    """An unhashable element would otherwise raise TypeError from the
+    duplicate check and escape as a traceback rather than a ConfigError."""
+    p = tmp_path / "benchmark.yaml"
+    p.write_text(f"name: t\n{body}")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, BenchmarkConfig)
+    assert "benchmark.yaml" in str(exc.value)
+    assert "plain string or number" in str(exc.value)
+
+
+def test_benchmark_config_checks_a_tuple_too() -> None:
+    """The validator runs before coercion, so it must not assume a list."""
+    with pytest.raises(ValidationError) as exc:
+        BenchmarkConfig(families=(Family.BASE64, Family.NONE))  # type: ignore[arg-type]
+    assert "none" in str(exc.value)
+    with pytest.raises(ValidationError):
+        BenchmarkConfig(difficulties=(1, 1))  # type: ignore[arg-type]

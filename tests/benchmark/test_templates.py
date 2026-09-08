@@ -33,6 +33,7 @@ from tipguard.benchmark.transformations import (
 from tipguard.benchmark.transformations.base import Family
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import PoliciesConfig
+from tipguard.evaluation.case import normalise_answer
 
 DISTRACTOR_WORD_RANGE = (60, 120)
 
@@ -413,12 +414,12 @@ def _scored_payloads(bank: TemplateBank) -> list[Any]:
 
 
 def test_no_expected_answer_appears_inside_its_own_instruction(bank: TemplateBank) -> None:
-    """Answers are scored by case-insensitive containment, so a question that
-    contains its own answer is passed by a model that merely restates it."""
+    """Answers are scored by containment of the normalised forms, so a question
+    that contains its own answer is passed by a model that merely restates it.
+    Checked through the real scorer's normalisation, not an approximation."""
     for payload in _scored_payloads(bank):
-        assert payload.expected_answer.lower() not in payload.instruction.lower(), (
-            payload.payload_id
-        )
+        answer = normalise_answer(payload.expected_answer)
+        assert answer not in normalise_answer(payload.instruction), payload.payload_id
 
 
 def test_no_expected_answer_matches_another_instruction_or_a_distractor(
@@ -427,11 +428,11 @@ def test_no_expected_answer_matches_another_instruction_or_a_distractor(
     others = [payload.instruction for payload in bank.benign_payloads]
     others += list(bank.difficulty.distractors)
     for payload in _scored_payloads(bank):
-        answer = payload.expected_answer.lower()
+        answer = normalise_answer(payload.expected_answer)
         for text in others:
             if text == payload.instruction:
                 continue
-            assert answer not in text.lower(), (payload.payload_id, text[:60])
+            assert answer not in normalise_answer(text), (payload.payload_id, text[:60])
 
 
 def test_numeric_answers_are_long_enough_not_to_match_inside_a_larger_number(
@@ -543,7 +544,8 @@ def test_intent_hints_cover_every_policy_category_and_benign(
     bank: TemplateBank, policies: PoliciesConfig
 ) -> None:
     for policy in policies.policies:
-        assert bank.difficulty.intent_hint_for(policy.categories[0])
+        for category in policy.categories:
+            assert bank.difficulty.intent_hint_for(category)
     assert bank.difficulty.intent_hint_for(BENIGN_CATEGORY)
     with pytest.raises(ConfigError):
         bank.difficulty.intent_hint_for("not-a-category")
@@ -568,18 +570,22 @@ def test_every_intent_hint_renders_grammatically_in_every_level_one_template(
 # --- further validation failures -------------------------------------------
 
 
+@pytest.mark.parametrize("dropped", [BENIGN_CATEGORY, "pii"])
 def test_missing_intent_hint_category_raises_naming_the_file(
-    scratch: Path, policies: PoliciesConfig
+    scratch: Path, policies: PoliciesConfig, dropped: str
 ) -> None:
-    def drop_benign(raw: dict[str, Any]) -> dict[str, Any]:
-        hints = {k: v for k, v in raw["intent_hints"].items() if k != BENIGN_CATEGORY}
+    """`pii` is a policy's SECOND category, so dropping it catches a coverage
+    check that only looked at the first one."""
+
+    def drop_category(raw: dict[str, Any]) -> dict[str, Any]:
+        hints = {k: v for k, v in raw["intent_hints"].items() if k != dropped}
         return {**raw, "intent_hints": hints}
 
-    _rewrite(scratch / "difficulty.yaml", drop_benign)
+    _rewrite(scratch / "difficulty.yaml", drop_category)
     with pytest.raises(ConfigError) as exc:
         TemplateBank.load(scratch, policies)
     assert "difficulty.yaml" in str(exc.value)
-    assert BENIGN_CATEGORY in str(exc.value)
+    assert dropped in str(exc.value)
 
 
 def test_intent_hint_that_is_not_a_mid_sentence_clause_raises(
