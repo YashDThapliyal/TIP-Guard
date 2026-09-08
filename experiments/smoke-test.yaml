@@ -1,0 +1,8 @@
+name: smoke-test
+seed: 0
+dataset: data/generated/smoke.jsonl
+main_model: mock-main
+defense:
+  name: no_defense
+output_dir: reports/runs
+cache_dir: null
