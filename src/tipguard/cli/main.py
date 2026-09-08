@@ -219,9 +219,12 @@ def split(
     out_dir: Annotated[
         Path, typer.Option("--out-dir", help="Where the manifests are written.")
     ] = DEFAULT_SPLITS_DIR,
+    policies: Annotated[
+        Path, typer.Option(help="Policies YAML, used only to redact error messages.")
+    ] = DEFAULT_POLICIES,
 ) -> None:
     """Assign split conditions, rewrite the dataset in place, and write manifests."""
-    protected = _protected_values(DEFAULT_POLICIES)
+    protected = _protected_values(policies)
     try:
         split_config = load_yaml_model(config, SplitConfig)
         cases = assign_splits(load_cases(dataset), split_config)

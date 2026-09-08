@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 
-from tipguard.benchmark.schema import BenchmarkCase, CaseType, Split
+from tipguard.benchmark.schema import BenchmarkCase, Split
 from tipguard.benchmark.transformations.base import Family
 from tipguard.config.schemas import FrozenModel
 
@@ -116,6 +116,20 @@ def _multi_step_pair(case: BenchmarkCase) -> FamilyPair | None:
         return None
 
 
+def _case_families(case: BenchmarkCase) -> frozenset[str]:
+    """Every family `case` uses, including the halves of a composition.
+
+    A multi-step case is labelled `multi_step` whatever it composes, so the
+    family hold-out has to look inside it: otherwise a configuration that
+    withholds base64 still shows base64 to the standard splits, wrapped in a
+    second transformation.
+    """
+    pair = _multi_step_pair(case)
+    if pair is None:
+        return frozenset({case.transformation})
+    return frozenset({case.transformation, pair[0].value, pair[1].value})
+
+
 def _heldout_phrasings(cases: Sequence[BenchmarkCase], count: int) -> dict[str, frozenset[int]]:
     """The last `count` phrasing indices observed per intent, from the data."""
     observed: dict[str, set[int]] = defaultdict(set)
@@ -142,18 +156,22 @@ def _heldout_split(case: BenchmarkCase, conditions: _Conditions) -> Split | None
     The compositional test precedes the paraphrase test deliberately: a
     multi-step case can satisfy both, and the compositional pool is both
     smaller and the more interesting generalization claim.
+
+    The paraphrase test is not restricted to TIP cases. A `direct` case carries
+    the same `intent_id` and `phrasing_index` and is the plaintext form of the
+    very sentence the TIP case encodes, so leaving it in the standard pool
+    would put the reserved wording in front of the defense verbatim.
     """
-    if case.transformation in conditions.families:
+    if _case_families(case) & conditions.families:
         return Split.HELDOUT_TRANSFORMATION
     if case.policy_id is not None and case.policy_id == conditions.policy:
         return Split.HELDOUT_POLICY
     if _multi_step_pair(case) in conditions.pairs:
         return Split.HELDOUT_COMPOSITIONAL
-    if case.case_type is CaseType.TIP:
-        intent = case.metadata.get("intent_id")
-        index = _phrasing_index(case)
-        if intent and index in conditions.phrasings.get(intent, frozenset()):
-            return Split.HELDOUT_PARAPHRASE
+    intent = case.metadata.get("intent_id")
+    index = _phrasing_index(case)
+    if intent and index in conditions.phrasings.get(intent, frozenset()):
+        return Split.HELDOUT_PARAPHRASE
     return None
 
 
@@ -166,19 +184,42 @@ def _stratum(case: BenchmarkCase) -> Stratum:
     return (case.case_type.value, case.transformation, case.difficulty)
 
 
-def _stratum_splits(size: int, config: SplitConfig) -> tuple[Split, ...]:
-    """The split labels for one shuffled stratum, in order.
+#: A stratum at least this large always contributes to dev, even when its
+#: proportional share rounds to nothing. Below it there is nothing sensible to
+#: take, since every split would be left empty by the transfer.
+MIN_SIZE_FOR_DEV = 3
 
-    Boundaries are rounded rather than floored so a stratum of any size stays
-    close to the configured proportions instead of leaking its remainder into
-    a single split.
+
+def _largest_remainder(size: int, config: SplitConfig) -> dict[Split, int]:
+    """Whole counts summing to `size` and closest to the configured shares.
+
+    Flooring alone loses up to two cases per stratum and rounding each boundary
+    independently can overshoot, so the floors are taken first and the leftover
+    handed to the largest fractional parts, ties broken by split name for
+    determinism.
     """
-    train_end = round(size * config.train)
-    dev_end = round(size * (config.train + config.dev))
-    return (
-        (Split.TRAIN,) * train_end
-        + (Split.DEV,) * (dev_end - train_end)
-        + (Split.TEST,) * (size - dev_end)
+    shares = {
+        Split.TRAIN: size * config.train,
+        Split.DEV: size * config.dev,
+        Split.TEST: size * config.test,
+    }
+    counts = {split: int(share) for split, share in shares.items()}
+    leftover = size - sum(counts.values())
+    ranked = sorted(shares, key=lambda split: (-(shares[split] % 1), split.value))
+    for split in ranked[:leftover]:
+        counts[split] += 1
+    return counts
+
+
+def _stratum_splits(size: int, config: SplitConfig) -> tuple[Split, ...]:
+    """The split labels for one shuffled stratum, in order."""
+    counts = _largest_remainder(size, config)
+    if size >= MIN_SIZE_FOR_DEV and counts[Split.DEV] == 0:
+        donor = max(counts, key=lambda split: (counts[split], split.value))
+        counts[donor] -= 1
+        counts[Split.DEV] += 1
+    return tuple(
+        split for split in (Split.TRAIN, Split.DEV, Split.TEST) for _ in range(counts[split])
     )
 
 
@@ -236,17 +277,30 @@ that has seen them measures memorisation, not generalization.
 - `test` — the in-distribution held-out pool, drawn from the same conditions as
   `train`, so it measures ordinary generalization only.
 - `heldout_transformation` — every case using an encoding family withheld from
-  the standard splits, attacks and their benign counterparts alike. It tests
-  whether a defense recovers intent from a transformation it has never seen.
+  the standard splits, including a family composed inside a multi-step case,
+  attacks and their benign counterparts alike. It tests whether a defense
+  recovers intent from a transformation it has never seen. Some of its cases
+  also target the withheld policy and are therefore doubly held out, so a
+  failure on them cannot be attributed to the novel transformation alone;
+  report the headline both over the whole condition and over the cases that
+  are held out for the transformation only.
 - `heldout_policy` — every case targeting a withheld policy's secret. It tests
   whether the defense generalizes across protected content rather than
   memorising the phrasing of one policy.
 - `heldout_compositional` — multi-step cases, attacks and benign counterparts
   alike, whose inner and outer families are each present in training but whose
   composition is not. It separates knowing the parts from following the chain.
-- `heldout_paraphrase` — attacks written with the last phrasings of each
-  intent, unseen elsewhere. It tests robustness to rewording alone, holding the
-  transformation and the policy fixed.
+- `heldout_paraphrase` — cases written with the last phrasings of each intent,
+  unseen elsewhere, in both their encoded and their plaintext form. It tests
+  robustness to rewording: the transformations and policies these cases use
+  were all seen in training, so only the wording is new.
+
+`heldout_policy` and `heldout_paraphrase` contain no allow-side cases at all.
+Benign and hard-negative controls carry no policy and no intent, so neither
+condition can claim one, and every case in both expects `block`. No
+false-positive rate can be computed within them; measure false positives on the
+standard pool or on `heldout_transformation`, which does carry benign
+counterparts.
 """
 
 
@@ -260,6 +314,10 @@ def write_manifests(cases: Sequence[BenchmarkCase], out_dir: Path) -> dict[str, 
     for split in Split:
         case_ids = sorted(grouped.get(split, ()))
         if not case_ids:
+            # A split emptied by a configuration change must not leave last
+            # run's manifest behind: a consumer enumerating the directory would
+            # read stale case ids and the partition would no longer be exact.
+            (out_dir / f"{split.value}.json").unlink(missing_ok=True)
             continue
         manifest = {"split": split.value, "count": len(case_ids), "case_ids": case_ids}
         path = out_dir / f"{split.value}.json"

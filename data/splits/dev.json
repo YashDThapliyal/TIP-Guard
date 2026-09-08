@@ -1,6 +1,6 @@
 {
   "split": "dev",
-  "count": 103,
+  "count": 105,
   "case_ids": [
     "benign_transformation-base64-l1-0007",
     "benign_transformation-base64-l2-0006",
@@ -22,10 +22,9 @@
     "benign_transformation-substitution-l2-0011",
     "benign_transformation-substitution-l3-0002",
     "benign_transformation-substitution-l4-0002",
-    "direct-none-l1-0005",
-    "direct-none-l1-0030",
-    "direct-none-l1-0038",
-    "direct-none-l1-0039",
+    "direct-none-l1-0021",
+    "direct-none-l1-0023",
+    "direct-none-l1-0026",
     "hard_negative-none-l1-0006",
     "hard_negative-none-l1-0010",
     "hard_negative-none-l1-0012",
@@ -78,10 +77,12 @@
     "tip-indirect-l4-0014",
     "tip-indirect-l4-0019",
     "tip-multi_step-l1-0008",
+    "tip-multi_step-l1-0025",
     "tip-multi_step-l2-0002",
     "tip-multi_step-l2-0010",
     "tip-multi_step-l3-0005",
     "tip-multi_step-l3-0021",
+    "tip-multi_step-l4-0005",
     "tip-multi_step-l4-0019",
     "tip-riddle-l1-0006",
     "tip-riddle-l1-0010",
@@ -104,6 +105,7 @@
     "tip-substitution-l3-0017",
     "tip-substitution-l3-0030",
     "tip-substitution-l4-0017",
+    "tip-substitution-l4-0018",
     "tip-substitution-l4-0029"
   ]
 }

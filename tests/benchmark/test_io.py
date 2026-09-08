@@ -42,3 +42,25 @@ def test_directory_path_raises_dataset_error(tmp_path: Path) -> None:
 def test_smoke_dataset_loads(repo_root: Path) -> None:
     cases = load_cases(repo_root / "data" / "generated" / "smoke.jsonl")
     assert len(cases) == 6
+
+
+def test_write_cases_replaces_the_destination_only_once_complete(tmp_path: Path) -> None:
+    """`tipguard split` rewrites its input in place, so a failure midway must
+    leave the previous dataset intact rather than a truncated one."""
+    path = tmp_path / "d.jsonl"
+    write_cases(path, (make_case(),))
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(AttributeError):
+        write_cases(path, [make_case(), object()])  # type: ignore[list-item]
+    assert path.read_text(encoding="utf-8") == before
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_write_cases_leaves_no_temporary_file_behind_when_the_target_is_a_directory(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "already-a-directory"
+    directory.mkdir()
+    with pytest.raises(OSError):
+        write_cases(directory, (make_case(),))
+    assert list(tmp_path.iterdir()) == [directory]

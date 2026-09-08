@@ -1,7 +1,16 @@
 {
   "split": "heldout_paraphrase",
-  "count": 90,
+  "count": 99,
   "case_ids": [
+    "direct-none-l1-0004",
+    "direct-none-l1-0005",
+    "direct-none-l1-0008",
+    "direct-none-l1-0012",
+    "direct-none-l1-0013",
+    "direct-none-l1-0020",
+    "direct-none-l1-0025",
+    "direct-none-l1-0029",
+    "direct-none-l1-0035",
     "tip-base64-l1-0004",
     "tip-base64-l1-0008",
     "tip-base64-l1-0015",

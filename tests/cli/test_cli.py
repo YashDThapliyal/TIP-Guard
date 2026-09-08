@@ -320,3 +320,36 @@ def test_split_reports_an_unwritable_out_dir(tmp_path, repo_root) -> None:  # ty
     assert result.exit_code == 1
     assert "already-a-file" in result.stdout
     assert "cannot write" in result.stdout
+
+
+def test_split_redacts_with_the_policies_it_is_given(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    """A dataset generated from custom policies must not have its protected
+    value printed just because the standard policies file does not list it."""
+    policies = tmp_path / "custom-policies.yaml"
+    policies.write_text(
+        "policies:\n"
+        "  - policy_id: protect-thing\n"
+        "    description: d\n"
+        "    categories: [c]\n"
+        "    protected_values: [SUPER-SECRET-VALUE]\n"
+        "    protected_label: thing\n"
+    )
+    dataset = tmp_path / "broken.jsonl"
+    dataset.write_text('{"case_id": "x", "prompt": "SUPER-SECRET-VALUE"}\n')
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(dataset),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(tmp_path / "splits"),
+            "--policies",
+            str(policies),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "SUPER-SECRET-VALUE" not in result.stdout
+    assert "[REDACTED]" in result.stdout

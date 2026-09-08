@@ -1,5 +1,6 @@
 import json
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,12 @@ import pytest
 from tests.benchmark.test_schema import make_case
 from tipguard.benchmark.io import load_cases
 from tipguard.benchmark.schema import BenchmarkCase, CaseType, Decision, Split
-from tipguard.benchmark.splits import SplitConfig, assign_splits, write_manifests
+from tipguard.benchmark.splits import (
+    MIN_SIZE_FOR_DEV,
+    SplitConfig,
+    assign_splits,
+    write_manifests,
+)
 from tipguard.benchmark.transformations.base import Family
 from tipguard.config.loader import ConfigError, load_yaml_model
 
@@ -177,8 +183,12 @@ def test_last_phrasing_indices_of_each_intent_are_held_out(config: SplitConfig) 
     assert held == {17, 18, 19, 20}
 
 
-def test_paraphrase_rule_does_not_apply_to_benign_cases(config: SplitConfig) -> None:
-    case = _allowed(metadata=_metadata(phrasing_index="20"))
+def test_paraphrase_rule_does_not_apply_to_cases_without_an_intent(
+    config: SplitConfig,
+) -> None:
+    case = _allowed(
+        metadata={"payload_id": "bp-decode-09", "phrasing_index": "20", "topic": "decode_string"}
+    )
     assert assign_splits((case,), config)[0].split in STANDARD
 
 
@@ -293,3 +303,118 @@ def test_unreadable_multi_step_params_are_not_compositional(
         metadata=_metadata(encoded_params=encoded_params),
     )
     assert assign_splits((case,), config)[0].split is not Split.HELDOUT_COMPOSITIONAL
+
+
+def _reserved_phrasings(cases: Sequence[BenchmarkCase], count: int) -> dict[str, set[int]]:
+    """The held-out (intent, phrasing) pairs, re-derived from the cases."""
+    observed: dict[str, set[int]] = {}
+    for case in cases:
+        intent = case.metadata.get("intent_id")
+        index = case.metadata.get("phrasing_index")
+        if intent and index is not None:
+            observed.setdefault(intent, set()).add(int(index))
+    return {intent: set(sorted(indices)[-count:]) for intent, indices in observed.items()}
+
+
+def test_a_direct_case_at_a_reserved_phrasing_is_held_out(config: SplitConfig) -> None:
+    """A direct case is the plaintext of the TIP case's sentence, so leaving it
+    in the standard pool would show the reserved wording verbatim."""
+    direct = make_case(
+        case_id="direct-0019",
+        case_type=CaseType.DIRECT,
+        transformation="none",
+        metadata=_metadata(phrasing_index="19"),
+    )
+    cases = (
+        *(
+            make_case(case_id=f"tip-{index:04d}", metadata=_metadata(phrasing_index=str(index)))
+            for index in range(21)
+        ),
+        direct,
+    )
+    assigned = {case.case_id: case.split for case in assign_splits(cases, config)}
+    assert assigned["direct-0019"] is Split.HELDOUT_PARAPHRASE
+
+
+def test_no_reserved_phrasing_reaches_a_standard_split_in_any_case_type(
+    dataset: tuple[BenchmarkCase, ...], assigned: tuple[BenchmarkCase, ...], config: SplitConfig
+) -> None:
+    reserved = _reserved_phrasings(dataset, config.heldout_phrasing_count)
+    leaked = [
+        case.case_id
+        for case in assigned
+        if case.split in STANDARD
+        and int(case.metadata.get("phrasing_index", -1))
+        in reserved.get(case.metadata.get("intent_id", ""), set())
+    ]
+    assert leaked == []
+
+
+def test_a_family_composed_inside_a_multi_step_case_is_held_out() -> None:
+    """A multi-step case is labelled `multi_step` whatever it composes, so the
+    family rule has to look inside `encoded_params`."""
+    config = SplitConfig(heldout_families=[Family.BASE64])
+    case = make_case(
+        transformation=Family.MULTI_STEP.value,
+        metadata=_metadata(
+            encoded_params=json.dumps({"inner": "caesar", "outer": Family.BASE64.value})
+        ),
+    )
+    assert assign_splits((case,), config)[0].split is Split.HELDOUT_TRANSFORMATION
+
+
+def test_a_multi_step_case_composing_only_kept_families_stays_standard() -> None:
+    config = SplitConfig(heldout_families=[Family.BASE64])
+    case = make_case(
+        case_id="tip-multi-step-kept",
+        transformation=Family.MULTI_STEP.value,
+        metadata=_metadata(
+            phrasing_index="0",
+            encoded_params=json.dumps({"inner": "caesar", "outer": "reverse"}),
+        ),
+    )
+    filler = tuple(
+        make_case(case_id=f"tip-{index:04d}", metadata=_metadata(phrasing_index=str(index)))
+        for index in range(21)
+    )
+    assigned = {item.case_id: item.split for item in assign_splits((case, *filler), config)}
+    assert assigned["tip-multi-step-kept"] in STANDARD
+
+
+def test_a_small_stratum_still_contributes_to_dev(config: SplitConfig) -> None:
+    cases = tuple(
+        make_case(case_id=f"tip-small-{index}", metadata={}) for index in range(MIN_SIZE_FOR_DEV)
+    )
+    counts = Counter(case.split for case in assign_splits(cases, config))
+    assert counts[Split.DEV] == 1
+    assert set(counts) == STANDARD
+
+
+def test_every_stratum_of_the_dataset_reaches_dev(assigned: tuple[BenchmarkCase, ...]) -> None:
+    strata: dict[tuple[str, str, int], Counter[Split]] = {}
+    for case in assigned:
+        if case.split in STANDARD:
+            key = (case.case_type.value, case.transformation, case.difficulty)
+            strata.setdefault(key, Counter())[case.split] += 1
+    assert all(counts[Split.DEV] >= 1 for counts in strata.values())
+
+
+def test_a_stale_manifest_is_removed_when_its_split_empties(
+    dataset: tuple[BenchmarkCase, ...], config: SplitConfig, tmp_path: Path
+) -> None:
+    write_manifests(assign_splits(dataset, config), tmp_path)
+    stale = tmp_path / "heldout_compositional.json"
+    assert stale.is_file()
+    without_pairs = config.model_copy(update={"heldout_multi_step_pairs": []})
+    counts = write_manifests(assign_splits(dataset, without_pairs), tmp_path)
+    assert Split.HELDOUT_COMPOSITIONAL.value not in counts
+    assert not stale.exists()
+
+
+def test_readme_states_the_conditions_without_benign_counterparts(
+    config: SplitConfig, tmp_path: Path
+) -> None:
+    write_manifests(assign_splits((make_case(),), config), tmp_path)
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert "No\nfalse-positive rate can be computed within them" in readme
+    assert "doubly held out" in readme
