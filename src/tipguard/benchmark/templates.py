@@ -16,7 +16,7 @@ from pathlib import Path
 from string import Formatter
 from typing import Literal, get_args
 
-from pydantic import Field, ValidationError, ValidationInfo, field_validator
+from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from tipguard.benchmark.transformations import BANK_BACKED_FAMILIES, Family
 from tipguard.benchmark.transformations.riddle import RiddleBank, load_riddle_bank
@@ -194,6 +194,36 @@ class BenignPayload(FrozenModel):
     expected_answer: NonEmptyStr
     topic: NonEmptyStr
     kind: PayloadKind
+
+    @model_validator(mode="after")
+    def _kind_matches_what_is_scored(self) -> "BenignPayload":
+        """`kind` must agree with the payload's own scoring semantics.
+
+        Declaring the kind removed one class of contradiction and opened
+        another: nothing stopped a payload from claiming `answer` while its
+        expected answer is the instruction itself, or `transcribe` while the
+        two differ. The generator trusts `kind` for the wrapper and the
+        canonical intent but scores against `expected_answer`, so either
+        mistake rebuilds exactly the case this round removed -- a prompt
+        describing a task the case does not score.
+
+        The two fields are the whole definition of the distinction, so the
+        invariant is checkable rather than a matter of intent: transcription
+        means the answer IS the instruction. Compared stripped, so a stray
+        trailing space cannot flip the verdict.
+        """
+        transcribes = self.instruction.strip() == self.expected_answer.strip()
+        if self.kind == "transcribe" and not transcribes:
+            raise ValueError(
+                f"{self.payload_id}: kind 'transcribe' means the expected answer is the "
+                f"instruction itself, but they differ"
+            )
+        if self.kind == "answer" and transcribes:
+            raise ValueError(
+                f"{self.payload_id}: kind 'answer' means the expected answer is something "
+                f"other than the instruction, but they are the same"
+            )
+        return self
 
 
 class Framing(FrozenModel):

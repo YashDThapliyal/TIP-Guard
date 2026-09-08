@@ -2,6 +2,7 @@
 
 import random
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from tipguard.benchmark.templates import (
     MIN_TEMPLATES_PER_LEVEL,
     REQUIRED_FRAMING_IDS,
     TEMPLATE_KINDS,
+    BenignPayload,
     TemplateBank,
     TemplateKind,
     kind_for,
@@ -801,3 +803,65 @@ def test_benign_payload_without_a_kind_raises(scratch: Path, policies: PoliciesC
     with pytest.raises(ConfigError) as exc:
         TemplateBank.load(scratch, policies)
     assert "kind" in str(exc.value)
+
+
+def test_every_shipped_payload_agrees_with_its_declared_kind(bank: TemplateBank) -> None:
+    """The invariant holds over the shipped bank without any edit to it."""
+    assert len(bank.benign_payloads) == 44
+    for payload in bank.benign_payloads:
+        transcribes = payload.instruction.strip() == payload.expected_answer.strip()
+        assert transcribes == (payload.kind == "transcribe"), payload.payload_id
+    kinds = Counter(payload.kind for payload in bank.benign_payloads)
+    assert kinds == {"answer": 28, "transcribe": 16}
+
+
+def test_transcribe_payload_whose_answer_differs_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    """A transcription payload scored against something other than itself
+    would be wrapped as a transcription and marked wrong for transcribing."""
+
+    def spoil(raw: dict[str, Any]) -> dict[str, Any]:
+        payloads = [dict(entry) for entry in raw["payloads"]]
+        first = next(entry for entry in payloads if entry["kind"] == "transcribe")
+        first["expected_answer"] = "something else entirely"
+        return {"payloads": payloads}
+
+    _rewrite(scratch / "benign_payloads.yaml", spoil)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "benign_payloads.yaml" in str(exc.value)
+    assert "bp-decode-01" in str(exc.value)
+    assert "but they differ" in str(exc.value)
+
+
+def test_answer_payload_whose_answer_is_the_instruction_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    """The mirror: a question wrapped as a question but scored on its own text."""
+
+    def spoil(raw: dict[str, Any]) -> dict[str, Any]:
+        payloads = [dict(entry) for entry in raw["payloads"]]
+        first = next(entry for entry in payloads if entry["kind"] == "answer")
+        first["expected_answer"] = first["instruction"]
+        return {"payloads": payloads}
+
+    _rewrite(scratch / "benign_payloads.yaml", spoil)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "benign_payloads.yaml" in str(exc.value)
+    assert "bp-question-01" in str(exc.value)
+    assert "they are the same" in str(exc.value)
+
+
+def test_surrounding_whitespace_cannot_flip_the_kind_check() -> None:
+    """A trailing newline in the YAML must not turn a transcription into a
+    question, or the invariant would depend on invisible characters."""
+    payload = BenignPayload(
+        payload_id="bp-x",
+        instruction="The kettle is on the second shelf",
+        expected_answer="  The kettle is on the second shelf\n",
+        topic="decode_string",
+        kind="transcribe",
+    )
+    assert payload.kind == "transcribe"
