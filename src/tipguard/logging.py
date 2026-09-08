@@ -51,7 +51,10 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact(record.getMessage(), self._protected),
         }
-        return json.dumps(payload, default=str)
+        # `_redact_value` passes non-str/dict/list/tuple values through
+        # unchanged, so anything json cannot encode natively reaches
+        # `default` still bearing its raw repr — redact it there too.
+        return json.dumps(payload, default=lambda o: redact(str(o), self._protected))
 
 
 def configure_logging(level: str = "INFO", protected_values: Iterable[str] = ()) -> None:

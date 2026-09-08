@@ -131,3 +131,53 @@ def test_evaluate_rejects_non_positive_limit_option(repo_root, monkeypatch) -> N
         app, ["evaluate", "--config", "experiments/smoke-test.yaml", "--limit", "0"]
     )
     assert result.exit_code != 0
+
+
+CANARY = "CANARY-7f3a-KESTREL-9021"
+LEAKY_LINE = (
+    '{"case_id":"x","policy_id":null,"case_type":"hard_negative",'
+    '"transformation":"none","difficulty":1,"framing":"f","prompt'
+    '":"p","canonical_intent":"i","expected_decision":"allow","pr'
+    'otected_value_hash":null,"split":"test","note":"CANARY-7f3a-KESTREL-9021"}'
+)
+
+
+def test_validate_dataset_redacts_protected_values_in_errors(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    """A pydantic error quotes the offending input, which can be a protected
+    value; the CLI must not echo it."""
+    dataset = tmp_path / "leaky.jsonl"
+    dataset.write_text(LEAKY_LINE + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["validate-dataset", str(dataset), "--policies", str(repo_root / "configs/policies.yaml")],
+    )
+    assert result.exit_code == 1
+    assert CANARY not in result.stdout
+    assert "[REDACTED]" in result.stdout
+
+
+def test_validate_dataset_echoes_unredacted_when_policies_cannot_be_loaded(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """Best effort: with no policies file there is nothing to redact against,
+    so the message is still shown rather than swallowed."""
+    dataset = tmp_path / "leaky.jsonl"
+    dataset.write_text(LEAKY_LINE + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app, ["validate-dataset", str(dataset), "--policies", str(tmp_path / "missing.yaml")]
+    )
+    assert result.exit_code == 1
+    assert "missing.yaml" in result.stdout or CANARY in result.stdout
+
+
+def test_evaluate_redacts_protected_values_in_errors(tmp_path, repo_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    dataset = tmp_path / "leaky.jsonl"
+    dataset.write_text(LEAKY_LINE + "\n", encoding="utf-8")
+    config = tmp_path / "cfg.yaml"
+    config.write_text(
+        f"name: t\ndataset: {dataset}\nmain_model: mock-main\n"
+        f"defense:\n  name: no_defense\noutput_dir: {tmp_path / 'out'}\ncache_dir: null\n"
+    )
+    result = runner.invoke(app, ["evaluate", "--config", str(config)])
+    assert result.exit_code == 1
+    assert CANARY not in result.stdout
+    assert "[REDACTED]" in result.stdout

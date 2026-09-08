@@ -10,7 +10,7 @@ from typing import Any
 
 from tipguard.config.schemas import ModelSpec
 from tipguard.models.pricing import estimate_cost
-from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, ProviderError
+from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, provider_error
 
 ChatMessage = dict[str, str]
 
@@ -40,7 +40,7 @@ class AnthropicProvider:
         if self._client is None:
             from anthropic import Anthropic
 
-            self._client = Anthropic()
+            self._client = Anthropic(base_url=self.spec.base_url)
         return self._client
 
     def complete(self, request: ModelRequest) -> ModelResponse:
@@ -64,7 +64,7 @@ class AnthropicProvider:
                 max_tokens=max_tokens,
             )
         except Exception as exc:
-            raise ProviderError(f"{self.name}/{self.model}: {exc}") from exc
+            raise provider_error(self.name, self.model, exc) from exc
         latency_ms = (time.perf_counter() - started) * 1000
         text = "".join(
             block.text for block in result.content if getattr(block, "type", "") == "text"

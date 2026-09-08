@@ -5,7 +5,7 @@ from typing import Any
 
 from tipguard.config.schemas import ModelSpec
 from tipguard.models.pricing import estimate_cost
-from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, ProviderError
+from tipguard.models.types import JSON_INSTRUCTION, ModelRequest, ModelResponse, provider_error
 
 ChatMessage = dict[str, str]
 
@@ -65,7 +65,7 @@ class OpenAIProvider:
         try:
             completion = self.client.chat.completions.create(**kwargs)
         except Exception as exc:
-            raise ProviderError(f"{self.name}/{self.model}: {exc}") from exc
+            raise provider_error(self.name, self.model, exc) from exc
         latency_ms = (time.perf_counter() - started) * 1000
         usage = completion.usage
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)

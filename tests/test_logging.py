@@ -61,3 +61,23 @@ def test_logger_redacts_nested_structures_in_extra(capsys) -> None:  # type: ign
     assert record["pair"] == ["ok", "[REDACTED]"]  # JSON has no tuple type
     assert record["count"] == 3  # non-string, non-collection values pass through unchanged
     logging.getLogger("tipguard").handlers.clear()
+
+
+class _Opaque:
+    """A value json cannot encode natively, whose repr carries a secret."""
+
+    def __str__(self) -> str:
+        return "opaque(SECRET-1)"
+
+
+def test_logger_redacts_values_serialized_by_the_json_default_hook(capsys) -> None:  # type: ignore[no-untyped-def]
+    from pathlib import Path
+
+    configure_logging(protected_values=["SECRET-1"])
+    get_logger("test").info(
+        "hi", extra={"path": Path("/tmp/SECRET-1/report.json"), "obj": _Opaque()}
+    )
+    record = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert record["path"] == "/tmp/[REDACTED]/report.json"
+    assert record["obj"] == "opaque([REDACTED])"
+    logging.getLogger("tipguard").handlers.clear()

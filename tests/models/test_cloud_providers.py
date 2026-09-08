@@ -25,6 +25,12 @@ class FakeOpenAIClient:
         )
 
 
+class SecretBearingError(RuntimeError):
+    """Stands in for an SDK error whose text quotes the request body."""
+
+    status_code = 429
+
+
 class FakeAnthropicClient:
     def __init__(self) -> None:
         self.calls: list[dict] = []  # type: ignore[type-arg]
@@ -143,3 +149,91 @@ def test_anthropic_provider_json_instruction_targets_last_user_when_no_system() 
     call = client.calls[0]
     assert call["system"] == ""
     assert "JSON" in call["messages"][-1]["content"]
+
+
+def test_openai_provider_error_does_not_echo_sdk_text() -> None:
+    spec = ModelSpec(provider="openai", model="m")
+    client = FakeOpenAIClient()
+
+    def boom(**kwargs):  # type: ignore[no-untyped-def]
+        raise SecretBearingError("body: CANARY-7f3a-KESTREL-9021")
+
+    client.chat.completions.create = boom
+    with pytest.raises(ProviderError) as exc_info:
+        OpenAIProvider(spec, client=client).complete(ModelRequest.simple("q"))
+    message = str(exc_info.value)
+    assert message == "openai/m: SecretBearingError (status 429)"
+    assert "CANARY" not in message
+
+
+def test_openai_provider_error_omits_status_when_absent() -> None:
+    spec = ModelSpec(provider="openai", model="m")
+    with pytest.raises(ProviderError) as exc_info:
+        OpenAIProvider(spec, client=FakeOpenAIClient(fail=True)).complete(ModelRequest.simple("q"))
+    assert str(exc_info.value) == "openai/m: RuntimeError"
+
+
+def test_provider_error_logs_the_full_text_redacted(capsys) -> None:  # type: ignore[no-untyped-def]
+    import json
+    import logging
+
+    from tipguard.logging import configure_logging
+
+    configure_logging(level="DEBUG", protected_values=["CANARY-7f3a-KESTREL-9021"])
+    try:
+        spec = ModelSpec(provider="openai", model="m")
+        client = FakeOpenAIClient()
+
+        def boom(**kwargs):  # type: ignore[no-untyped-def]
+            raise SecretBearingError("body: CANARY-7f3a-KESTREL-9021")
+
+        client.chat.completions.create = boom
+        with pytest.raises(ProviderError):
+            OpenAIProvider(spec, client=client).complete(ModelRequest.simple("q"))
+        record = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+        assert record["message"] == "provider_call_failed"
+        assert record["error"] == "body: [REDACTED]"
+    finally:
+        logging.getLogger("tipguard").handlers.clear()
+
+
+def test_anthropic_provider_error_does_not_echo_sdk_text() -> None:
+    spec = ModelSpec(provider="anthropic", model="m")
+    client = FakeAnthropicClient()
+
+    def boom(**kwargs):  # type: ignore[no-untyped-def]
+        raise SecretBearingError("body: CANARY-7f3a-KESTREL-9021")
+
+    client.messages.create = boom
+    with pytest.raises(ProviderError) as exc_info:
+        AnthropicProvider(spec, client=client).complete(ModelRequest.simple("q"))
+    assert str(exc_info.value) == "anthropic/m: SecretBearingError (status 429)"
+
+
+def test_anthropic_client_is_built_with_the_spec_base_url(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import anthropic
+
+    recorded: list[dict] = []  # type: ignore[type-arg]
+
+    def fake_anthropic(**kwargs):  # type: ignore[no-untyped-def]
+        recorded.append(kwargs)
+        return FakeAnthropicClient()
+
+    monkeypatch.setattr(anthropic, "Anthropic", fake_anthropic)
+    spec = ModelSpec(provider="anthropic", model="m", base_url="http://proxy.example/v1")
+    AnthropicProvider(spec).complete(ModelRequest.simple("q"))
+    assert recorded == [{"base_url": "http://proxy.example/v1"}]
+
+
+def test_anthropic_client_base_url_defaults_to_none(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import anthropic
+
+    recorded: list[dict] = []  # type: ignore[type-arg]
+
+    def fake_anthropic(**kwargs):  # type: ignore[no-untyped-def]
+        recorded.append(kwargs)
+        return FakeAnthropicClient()
+
+    monkeypatch.setattr(anthropic, "Anthropic", fake_anthropic)
+    AnthropicProvider(ModelSpec(provider="anthropic", model="m")).complete(ModelRequest.simple("q"))
+    assert recorded == [{"base_url": None}]
