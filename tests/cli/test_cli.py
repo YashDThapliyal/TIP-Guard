@@ -69,6 +69,24 @@ def test_evaluate_rejects_unsafe_run_id(repo_root, monkeypatch) -> None:  # type
     assert "invalid run id" in result.stdout
 
 
+def test_evaluate_rejects_run_id_with_trailing_newline(repo_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--config",
+            "experiments/smoke-test.yaml",
+            "--run-id",
+            "abc\n",
+            "--limit",
+            "1",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "invalid run id" in result.stdout
+
+
 def test_evaluate_refuses_to_overwrite_existing_run_dir(tmp_path, repo_root, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(repo_root)
     monkeypatch.setenv("TIPGUARD_OUTPUT_DIR", str(tmp_path))

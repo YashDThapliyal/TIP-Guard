@@ -115,3 +115,9 @@ def test_make_run_id_format() -> None:
 
 def test_slug_falls_back_to_run_when_empty() -> None:
     assert slug("!!!") == "run"
+
+
+def test_make_run_id_truncates_long_names() -> None:
+    now = datetime(2026, 9, 7, 12, 0, 0, tzinfo=UTC)
+    run_id = make_run_id("x" * 300, Cfg(a=1, b="x"), now=now)
+    assert len(run_id) <= 128

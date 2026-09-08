@@ -1,5 +1,6 @@
 """Run one experiment configuration end to end and persist its artifacts."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -62,13 +63,29 @@ def _ensure_dataset_valid(
 
 
 def _ensure_run_id_safe(run_id: str) -> None:
-    if not _RUN_ID_PATTERN.match(run_id):
+    if not _RUN_ID_PATTERN.fullmatch(run_id):
         raise ConfigError(f"invalid run id {run_id!r}")
 
 
-def _ensure_run_dir_free(run_dir: Path) -> None:
-    if run_dir.exists() and any(run_dir.iterdir()):
-        raise ConfigError(f"run directory already exists: {run_dir}; choose another --run-id")
+def _reserve_run_dir(run_dir: Path) -> None:
+    """Atomically claim run_dir so two concurrent runs with the same id can't
+    both pass a check-then-write race. mkdir(exist_ok=False) is the atomic
+    reservation; a losing concurrent caller sees FileExistsError.
+    """
+    try:
+        run_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise ConfigError(
+            f"run directory already exists: {run_dir}; choose another --run-id"
+        ) from exc
+
+
+def _release_run_dir_if_empty(run_dir: Path) -> None:
+    """Undo a reservation after a failed run so a retry with the same id isn't
+    blocked by an empty directory nothing ever wrote artifacts into."""
+    with contextlib.suppress(OSError):
+        if run_dir.is_dir() and not any(run_dir.iterdir()):
+            run_dir.rmdir()
 
 
 def _log_records(records: Sequence[CaseRecord]) -> None:
@@ -139,7 +156,7 @@ def run_experiment(
     _ensure_run_id_safe(resolved_run_id)
     output_dir = Path(os.environ.get(OUTPUT_DIR_ENV) or config.output_dir)
     run_dir = output_dir / resolved_run_id
-    _ensure_run_dir_free(run_dir)
+    _reserve_run_dir(run_dir)
     cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
     try:
         registry = ProviderRegistry(models, cache=cache)
@@ -149,6 +166,9 @@ def run_experiment(
         _log_records(records)
         summary = summarize(records)
         manifest = _build_manifest(config, config_path, resolved_run_id, now, registry, output_dir)
+    except Exception:
+        _release_run_dir_if_empty(run_dir)
+        raise
     finally:
         if cache is not None:
             cache.close()

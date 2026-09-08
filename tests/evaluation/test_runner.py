@@ -2,11 +2,15 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from tipguard.benchmark.schema import CaseType, Decision
 from tipguard.config.loader import load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
+from tipguard.evaluation import runner as runner_module
 from tipguard.evaluation.runner import run_experiment
 from tipguard.models.cache import ResponseCache
+from tipguard.models.types import ProviderError
 
 
 def test_run_experiment_writes_artifacts(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -45,6 +49,27 @@ def test_run_experiment_closes_response_cache(repo_root: Path, tmp_path: Path, m
     artifacts = run_experiment(config, Path("experiments/smoke-test.yaml"))
     assert closed == [True]
     assert artifacts.summary.total == 6
+
+
+def test_run_experiment_removes_reserved_dir_on_failure(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    class _FailingGuardrail:
+        name = "failing"
+
+        def run(self, prompt: str):  # type: ignore[no-untyped-def]
+            raise ProviderError("boom")
+
+    monkeypatch.setattr(runner_module, "build_guardrail", lambda *a, **k: _FailingGuardrail())
+    config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
+    config = config.model_copy(update={"output_dir": tmp_path, "limit": 1})
+    run_dir = tmp_path / "failure-run"
+    with pytest.raises(ProviderError):
+        run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="failure-run")
+    assert not run_dir.exists()
 
 
 def test_records_mark_leaks_and_correctness(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

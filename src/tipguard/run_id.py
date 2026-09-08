@@ -67,4 +67,5 @@ def slug(name: str) -> str:
 
 def make_run_id(name: str, config: BaseModel, now: datetime | None = None) -> str:
     stamp = (now or datetime.now(UTC)).strftime("%Y%m%dT%H%M%SZ")
-    return f"{slug(name)}-{stamp}-{short_config_hash(config)}"
+    trimmed_slug = slug(name)[:100].rstrip("-") or "run"
+    return f"{trimmed_slug}-{stamp}-{short_config_hash(config)}"
