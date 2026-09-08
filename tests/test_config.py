@@ -3,6 +3,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from tipguard.benchmark.config import BenchmarkConfig
+from tipguard.benchmark.transformations import get_transformation, load_riddle_bank
+from tipguard.benchmark.transformations.base import Family
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import (
     ExperimentConfig,
@@ -125,3 +128,60 @@ def test_policy_rejects_whitespace_only_protected_value() -> None:
             protected_label="l",
             protected_values=["   "],
         )
+
+
+def test_benchmark_config_loads_from_repo(repo_root: Path) -> None:
+    cfg = load_yaml_model(repo_root / "configs" / "benchmark.yaml", BenchmarkConfig)
+    assert cfg.name == "tipguard-v1"
+    assert cfg.seed == 20260907
+    assert cfg.templates_dir == Path("data/templates")
+    assert cfg.policies_config == Path("configs/policies.yaml")
+    assert cfg.difficulties == [1, 2, 3, 4]
+    assert cfg.framings == ["first-person", "third-person"]
+    assert cfg.paraphrases_per_combination == 3
+    assert cfg.benign_per_family_per_level == 12
+    assert cfg.direct_per_policy == 8
+    assert cfg.hard_negative_paraphrases == 3
+    assert cfg.output == Path("data/generated/tipguard-v1.jsonl")
+
+
+def test_benchmark_config_family_lists(repo_root: Path) -> None:
+    cfg = load_yaml_model(repo_root / "configs" / "benchmark.yaml", BenchmarkConfig)
+    assert cfg.families == [
+        Family.BASE64,
+        Family.CAESAR,
+        Family.MORSE,
+        Family.SUBSTITUTION,
+        Family.CODE,
+        Family.MULTI_STEP,
+        Family.RIDDLE,
+        Family.INDIRECT,
+    ]
+    assert Family.REVERSE in cfg.benign_families
+    assert Family.RIDDLE not in cfg.benign_families
+    assert Family.INDIRECT not in cfg.benign_families
+    assert Family.NONE not in cfg.families + cfg.benign_families
+
+
+def test_shipped_benchmark_config_matches_the_defaults(repo_root: Path) -> None:
+    """The YAML records the defaults explicitly, so drift between the two is a bug."""
+    cfg = load_yaml_model(repo_root / "configs" / "benchmark.yaml", BenchmarkConfig)
+    assert cfg == BenchmarkConfig()
+
+
+def test_benchmark_config_families_resolve_to_transformations(repo_root: Path) -> None:
+    cfg = load_yaml_model(repo_root / "configs" / "benchmark.yaml", BenchmarkConfig)
+    policies = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    bank = load_riddle_bank(
+        repo_root / "data" / "templates" / "riddles.yaml",
+        required_labels=[policy.protected_label for policy in policies.policies],
+    )
+    for family in [*cfg.families, *cfg.benign_families]:
+        assert get_transformation(family, bank).family is family
+
+
+def test_benchmark_config_rejects_a_zero_count(tmp_path: Path) -> None:
+    p = tmp_path / "benchmark.yaml"
+    p.write_text("name: t\nparaphrases_per_combination: 0\n")
+    with pytest.raises(ConfigError):
+        load_yaml_model(p, BenchmarkConfig)
