@@ -53,6 +53,12 @@ def test_format_stats_crosses_type_against_transformation_and_difficulty() -> No
     assert "| tip | 2 | 0 | 2 |" in report
     assert "| benign_transformation | 0 | 1 | 1 |" in report
     assert "| case type | 1 | 2 | total |" in report
-    assert "| split | cases |" in report
-    assert "| test | 2 |" in report
-    assert "| train | 1 |" in report
+
+
+def test_format_stats_shows_the_block_and_allow_balance_of_each_split() -> None:
+    """Two split conditions carry no allow-side cases, which a totals-only
+    table hides; the card quotes this straight from the command."""
+    report = format_stats(_cases(), "d")  # type: ignore[arg-type]
+    assert "| split | cases | expect block | expect allow |" in report
+    assert "| test | 2 | 2 | 0 |" in report
+    assert "| train | 1 | 0 | 1 |" in report

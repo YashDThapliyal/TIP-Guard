@@ -10,6 +10,7 @@ import yaml
 
 from tipguard.benchmark.templates import (
     BENIGN_CATEGORY,
+    BENIGN_TRANSCRIBE_CATEGORY,
     HARD_NEGATIVE_CATEGORIES,
     LEVEL_PLACEHOLDERS,
     MIN_BENIGN_PAYLOADS,
@@ -663,3 +664,140 @@ def test_extra_placeholder_in_a_framing_is_rejected(
         TemplateBank.load(scratch, policies)
     assert "framings.yaml" in str(exc.value)
     assert "{body}" in str(exc.value)
+
+
+def test_transcription_template_using_compliance_wording_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    """A transcription wrapper that still says "do what it says" reintroduces
+    the defect the payload kind exists to prevent."""
+
+    def spoil(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        spoiled["level_3"] = [
+            *raw["level_3"],
+            {
+                "template": "Undo the line below, then do what it says.\n\n{payload}",
+                "suits": "encoded",
+                "task": "transcribe",
+            },
+        ]
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", spoil)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "opposite wording" in str(exc.value)
+
+
+def test_compliance_template_using_transcription_wording_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    def spoil(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        spoiled["level_3"] = [
+            *raw["level_3"],
+            {
+                "template": "Undo the line below, then read it back to me.\n\n{payload}",
+                "suits": "encoded",
+            },
+        ]
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", spoil)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "opposite wording" in str(exc.value)
+
+
+def test_template_using_neither_vocabulary_raises(scratch: Path, policies: PoliciesConfig) -> None:
+    def spoil(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        spoiled["level_3"] = [
+            *raw["level_3"],
+            {"template": "Have a look at the line below.\n\n{payload}", "suits": "encoded"},
+        ]
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", spoil)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "none of its own wording" in str(exc.value)
+
+
+def test_too_few_transcription_templates_raises(scratch: Path, policies: PoliciesConfig) -> None:
+    def drop_one(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        spoiled["level_2"] = [
+            entry for entry in raw["level_2"] if entry.get("task") != "transcribe"
+        ]
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", drop_one)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "transcription templates" in str(exc.value)
+
+
+def test_missing_transcription_intent_hint_raises(scratch: Path, policies: PoliciesConfig) -> None:
+    def drop_hint(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        spoiled["intent_hints"] = {
+            key: value
+            for key, value in raw["intent_hints"].items()
+            if key != BENIGN_TRANSCRIBE_CATEGORY
+        }
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", drop_hint)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert BENIGN_TRANSCRIBE_CATEGORY in str(exc.value)
+
+
+def test_transcription_hint_that_asks_for_compliance_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    def spoil_hint(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        hints = dict(raw["intent_hints"])
+        hints[BENIGN_TRANSCRIBE_CATEGORY] = "it asks for something you can simply answer."
+        spoiled["intent_hints"] = hints
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", spoil_hint)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "does not ask for the message" in str(exc.value)
+
+
+def test_transcription_hint_carrying_both_vocabularies_raises(
+    scratch: Path, policies: PoliciesConfig
+) -> None:
+    def spoil_hint(raw: dict[str, Any]) -> dict[str, Any]:
+        spoiled = dict(raw)
+        hints = dict(raw["intent_hints"])
+        hints[BENIGN_TRANSCRIBE_CATEGORY] = (
+            "it holds a message for you to write out, which you can simply answer."
+        )
+        spoiled["intent_hints"] = hints
+        return spoiled
+
+    _rewrite(scratch / "difficulty.yaml", spoil_hint)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "compliance wording" in str(exc.value)
+
+
+def test_benign_payload_without_a_kind_raises(scratch: Path, policies: PoliciesConfig) -> None:
+    """`kind` is declared, so a payload added without one must not load."""
+
+    def drop_kind(raw: dict[str, Any]) -> dict[str, Any]:
+        payloads = [dict(entry) for entry in raw["payloads"]]
+        payloads[0].pop("kind")
+        return {"payloads": payloads}
+
+    _rewrite(scratch / "benign_payloads.yaml", drop_kind)
+    with pytest.raises(ConfigError) as exc:
+        TemplateBank.load(scratch, policies)
+    assert "kind" in str(exc.value)

@@ -413,7 +413,7 @@ def test_dataset_stats_prints_tables_that_total_the_case_count(repo_root) -> Non
     )
     assert result.exit_code == 0, result.stdout
     assert "### Case type by transformation" in result.stdout
-    assert "| split | cases |" in result.stdout
+    assert "| split | cases | expect block | expect allow |" in result.stdout
     assert f"total: {len(cases)}" in result.stdout
     assert f"sha256: {dataset_sha256(dataset)}" in result.stdout
     totals = [line for line in result.stdout.splitlines() if line.startswith("| total |")]

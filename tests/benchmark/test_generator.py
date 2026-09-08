@@ -9,12 +9,17 @@ import pytest
 from tipguard.benchmark.config import BenchmarkConfig
 from tipguard.benchmark.generator import (
     BENIGN_INTENT,
-    BENIGN_STATEMENT_INTENT,
+    BENIGN_TRANSCRIBE_INTENT,
     benign_intent,
     generate_cases,
 )
 from tipguard.benchmark.schema import BenchmarkCase, CaseType, Decision, hash_protected_value
-from tipguard.benchmark.templates import TemplateBank
+from tipguard.benchmark.templates import (
+    COMPLIANCE_PHRASES,
+    TRANSCRIPTION_PHRASES,
+    TemplateBank,
+    contains_any,
+)
 from tipguard.benchmark.transformations import Family
 from tipguard.benchmark.validate import validate_cases
 from tipguard.config.loader import load_yaml_model
@@ -125,30 +130,77 @@ def test_benign_cases_have_an_answer_and_no_policy(cases: tuple[BenchmarkCase, .
         assert case.expected_decision is Decision.ALLOW
 
 
+def _benign_by_kind(
+    cases: tuple[BenchmarkCase, ...], bank: TemplateBank
+) -> dict[str, list[BenchmarkCase]]:
+    """The benign controls split by the declared kind of their payload."""
+    kinds = {payload.payload_id: payload.kind for payload in bank.benign_payloads}
+    grouped: dict[str, list[BenchmarkCase]] = {"answer": [], "transcribe": []}
+    for case in cases:
+        if case.case_type is CaseType.BENIGN_TRANSFORMATION:
+            grouped[kinds[case.metadata["payload_id"]]].append(case)
+    assert grouped["answer"] and grouped["transcribe"]
+    return grouped
+
+
 def test_benign_intent_matches_what_the_payload_actually_is(
-    cases: tuple[BenchmarkCase, ...],
+    cases: tuple[BenchmarkCase, ...], bank: TemplateBank
 ) -> None:
-    """A statement payload must not be described as a request.
+    """A payload that is its own answer must not be described as a request.
 
     The gold review found the single intent sentence claiming every benign
     payload "contains a harmless request", which is false of the sixteen
-    `decode_string` payloads: those are plain statements the reader writes
-    back out. A defense scored on reconstructing intent would be marked wrong
-    for reading such a case correctly.
+    transcription payloads: those are messages the reader writes back out. A
+    defense scored on reconstructing intent would be marked wrong for reading
+    such a case correctly.
     """
-    benign = [c for c in cases if c.case_type is CaseType.BENIGN_TRANSFORMATION]
-    assert benign
-    statements = [c for c in benign if c.metadata["topic"] == "decode_string"]
-    requests = [c for c in benign if c.metadata["topic"] != "decode_string"]
-    assert statements and requests
-    assert {c.canonical_intent for c in statements} == {BENIGN_STATEMENT_INTENT}
-    assert {c.canonical_intent for c in requests} == {BENIGN_INTENT}
+    grouped = _benign_by_kind(cases, bank)
+    assert {c.canonical_intent for c in grouped["transcribe"]} == {BENIGN_TRANSCRIBE_INTENT}
+    assert {c.canonical_intent for c in grouped["answer"]} == {BENIGN_INTENT}
 
 
-def test_benign_intent_selects_on_the_topic() -> None:
-    assert benign_intent("decode_string") == BENIGN_STATEMENT_INTENT
-    assert benign_intent("question") == BENIGN_INTENT
-    assert benign_intent("arithmetic") == BENIGN_INTENT
+def test_transcription_prompts_never_tell_the_reader_to_comply(
+    cases: tuple[BenchmarkCase, ...], bank: TemplateBank
+) -> None:
+    """Fixing the intent alone left the scaffolding asserting a request.
+
+    The wrapper and the level 1 goal clause describe the task too, so both
+    have to follow the payload kind or the prompt contradicts its own intent.
+    """
+    for case in _benign_by_kind(cases, bank)["transcribe"]:
+        found = contains_any(case.prompt, COMPLIANCE_PHRASES)
+        assert found is None, f"{case.case_id} tells the reader to {found!r}"
+        assert contains_any(case.prompt, TRANSCRIPTION_PHRASES) is not None, case.case_id
+
+
+def test_answer_prompts_never_ask_for_the_message_back(
+    cases: tuple[BenchmarkCase, ...], bank: TemplateBank
+) -> None:
+    """The mirror: a question's answer is not the question."""
+    for case in _benign_by_kind(cases, bank)["answer"]:
+        found = contains_any(case.prompt, TRANSCRIPTION_PHRASES)
+        assert found is None, f"{case.case_id} asks the reader to {found!r}"
+        assert contains_any(case.prompt, COMPLIANCE_PHRASES) is not None, case.case_id
+
+
+def test_attack_prompts_are_always_compliance_framed(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    """Nothing outside the benign controls may borrow transcription wording.
+
+    An attack asking only for its hidden text to be written out would be a
+    different case than the one its intent claims.
+    """
+    for case in cases:
+        if case.case_type in {CaseType.DIRECT, CaseType.HARD_NEGATIVE}:
+            continue
+        if case.case_type is CaseType.TIP:
+            assert contains_any(case.prompt, TRANSCRIPTION_PHRASES) is None, case.case_id
+
+
+def test_benign_intent_selects_on_the_payload_kind() -> None:
+    assert benign_intent("transcribe") == BENIGN_TRANSCRIBE_INTENT
+    assert benign_intent("answer") == BENIGN_INTENT
 
 
 def test_hard_negatives_are_unencoded_and_allowed(cases: tuple[BenchmarkCase, ...]) -> None:

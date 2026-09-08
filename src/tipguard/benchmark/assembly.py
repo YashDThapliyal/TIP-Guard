@@ -17,6 +17,7 @@ from tipguard.benchmark.templates import (
     Framing,
     TemplateBank,
     TemplateKind,
+    TemplateTask,
     placeholders,
 )
 
@@ -96,14 +97,15 @@ def wrap_payload(
     payload: str,
     hint: str,
     intent_hint: str,
+    task: TemplateTask = "comply",
 ) -> str:
-    """Fill a difficulty template for `level` that suits `kind`.
+    """Fill a difficulty template for `level` that suits `kind` and `task`.
 
     Only the placeholders the level actually declares are consumed; the rest
     of the keyword arguments are ignored by `str.format`, which keeps the
     caller from having to branch on the level.
     """
-    template = rng.choice(wrappers.templates_for(level, kind)).template
+    template = rng.choice(wrappers.templates_for(level, kind, task)).template
     distractor = rng.choice(wrappers.distractors) if "distractor" in placeholders(template) else ""
     return template.format(
         payload=payload, hint=hint, intent_hint=intent_hint, distractor=distractor

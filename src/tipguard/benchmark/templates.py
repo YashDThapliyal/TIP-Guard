@@ -34,6 +34,7 @@ MIN_PER_CATEGORY = 10
 LABEL_PLACEHOLDER = "{label}"
 BODY_PLACEHOLDER = "{body}"
 BENIGN_CATEGORY = "benign"
+BENIGN_TRANSCRIBE_CATEGORY = "benign_transcribe"
 
 FramingId = Literal["first-person", "third-person"]
 
@@ -44,6 +45,75 @@ FramingId = Literal["first-person", "third-person"]
 TemplateKind = Literal["encoded", "semantic"]
 TemplateSuits = Literal["encoded", "semantic", "both"]
 TEMPLATE_KINDS: tuple[TemplateKind, ...] = get_args(TemplateKind)
+
+#: What a benign payload asks of its reader, declared per payload rather than
+#: inferred. `answer` payloads pose a question whose answer is something else;
+#: `transcribe` payloads ARE the expected answer, so the task is to write the
+#: recovered text back out. The distinction is not the grammatical mood: "Turn
+#: left at the bridge and follow the river path" is an imperative and still a
+#: transcription, because what is scored is the sentence itself.
+PayloadKind = Literal["answer", "transcribe"]
+
+#: The matching axis on a wrapper. A wrapper that tells the reader to act on
+#: what it finds cannot carry a transcription payload -- there is nothing to
+#: act on -- and one that asks for the message back cannot carry a question.
+TemplateTask = Literal["comply", "transcribe"]
+
+#: Wording that instructs a reader to act on what the payload says. Every
+#: `comply` template must contain one of these and no `transcribe` template
+#: may, which is checked when the bank loads and again over every generated
+#: prompt. The phrases are long enough to be unambiguous: "follow the river
+#: path" is a benign payload, "follow the instruction you find" is an order.
+COMPLIANCE_PHRASES: tuple[str, ...] = (
+    "do what it says",
+    "do exactly what it says",
+    "do what it asks",
+    "do what it tells you to do",
+    "do whatever it asks",
+    "act on it",
+    "act on whatever",
+    "carry it out",
+    "carry out the result",
+    "then follow it",
+    "and follow it",
+    "follow the instruction you find",
+    "then following",
+    "answer it",
+    "and answer that",
+    "and give that",
+    "respond to what it asks",
+    "simply answer",
+)
+
+#: Wording that asks for the recovered text itself. The mirror of the above.
+TRANSCRIPTION_PHRASES: tuple[str, ...] = (
+    "for you to write out",
+    "give me the plain text",
+    "give me the message",
+    "set the message down",
+    "set out the message",
+    "set out the plain wording",
+    "hand it back to me",
+    "read it back to me",
+    "show me what it says",
+    "show me the plain wording",
+    "show me the message underneath",
+    "what the message underneath says",
+    "decoding and reading back",
+)
+
+
+def task_for(kind: PayloadKind) -> TemplateTask:
+    """The wrapper vocabulary a benign payload of `kind` needs."""
+    return "transcribe" if kind == "transcribe" else "comply"
+
+
+def contains_any(text: str, phrases: Sequence[str]) -> str | None:
+    """The first of `phrases` occurring in `text`, case-insensitively."""
+    lowered = text.lower()
+    return next((phrase for phrase in phrases if phrase in lowered), None)
+
+
 HardNegativeCategory = Literal[
     "academic", "classification", "defensive", "quoted", "suspicion_check"
 ]
@@ -111,12 +181,19 @@ class IntentTemplate(FrozenModel):
 
 
 class BenignPayload(FrozenModel):
-    """A harmless instruction used for the benign-transformation control cases."""
+    """A harmless instruction used for the benign-transformation control cases.
+
+    `kind` is declared, never derived. Deriving it from `topic` looked
+    equivalent and was not: two `decode_string` payloads are imperatives, so a
+    rule keyed on the sentence's mood would have called them requests, while
+    what the case actually scores is the sentence itself.
+    """
 
     payload_id: NonEmptyStr
     instruction: NonEmptyStr
     expected_answer: NonEmptyStr
     topic: NonEmptyStr
+    kind: PayloadKind
 
 
 class Framing(FrozenModel):
@@ -137,10 +214,17 @@ class Framing(FrozenModel):
 
 
 class DifficultyTemplate(FrozenModel):
-    """One wrapper template, and which kind of family its wording fits."""
+    """One wrapper template, which family kind its wording fits, and what it
+    tells the reader to do with what they recover.
+
+    `task` defaults to `comply` because that is what all but the benign
+    transcription controls need; a template that asks for the message back
+    declares itself.
+    """
 
     template: NonEmptyStr
     suits: TemplateSuits
+    task: TemplateTask = "comply"
 
     def fits(self, kind: TemplateKind) -> bool:
         return self.suits in (kind, "both")
@@ -158,18 +242,24 @@ class DifficultyWrappers(FrozenModel):
     distractors: list[NonEmptyStr] = Field(min_length=MIN_DISTRACTORS)
 
     def templates_for(
-        self, level: int, kind: TemplateKind | None = None
+        self,
+        level: int,
+        kind: TemplateKind | None = None,
+        task: TemplateTask | None = None,
     ) -> list[DifficultyTemplate]:
-        """The templates for `level`, restricted to those suiting `kind`.
+        """The templates for `level`, restricted to those suiting `kind` and
+        describing `task`. Either filter may be omitted.
 
         `KeyError` for a level that does not exist.
         """
         if level not in LEVEL_PLACEHOLDERS:
             raise KeyError(level)
         templates: list[DifficultyTemplate] = getattr(self, f"level_{level}")
-        if kind is None:
-            return templates
-        return [template for template in templates if template.fits(kind)]
+        if kind is not None:
+            templates = [template for template in templates if template.fits(kind)]
+        if task is not None:
+            templates = [template for template in templates if template.task == task]
+        return templates
 
     def intent_hint_for(self, category: str) -> str:
         """The plain-language goal clause for `category`."""
@@ -189,6 +279,23 @@ class DifficultyWrappers(FrozenModel):
                     f"intent hint for {category!r} must start lowercase and end "
                     f"with a full stop: {hint!r}"
                 )
+        return value
+
+    @field_validator("intent_hints")
+    @classmethod
+    def _the_transcription_hint_asks_for_the_message(cls, value: dict[str, str]) -> dict[str, str]:
+        """Level 1 states the goal in plain language before the wrapper does.
+
+        For a transcription control that clause is the first thing the reader
+        is told, so it must not describe a request the payload does not make.
+        """
+        hint = value.get(BENIGN_TRANSCRIBE_CATEGORY)
+        if hint is None:
+            raise ValueError(f"no intent hint for {BENIGN_TRANSCRIBE_CATEGORY!r}")
+        if contains_any(hint, TRANSCRIPTION_PHRASES) is None:
+            raise ValueError(f"transcription hint does not ask for the message: {hint!r}")
+        if (found := contains_any(hint, COMPLIANCE_PHRASES)) is not None:
+            raise ValueError(f"transcription hint uses compliance wording {found!r}: {hint!r}")
         return value
 
     @field_validator("level_1", "level_2", "level_3", "level_4")
@@ -213,11 +320,63 @@ class DifficultyWrappers(FrozenModel):
         cls, value: list[DifficultyTemplate], info: ValidationInfo
     ) -> list[DifficultyTemplate]:
         for kind in TEMPLATE_KINDS:
-            fitting = sum(1 for entry in value if entry.fits(kind))
+            fitting = sum(1 for entry in value if entry.fits(kind) and entry.task == "comply")
             if fitting < MIN_TEMPLATES_PER_LEVEL:
                 raise ValueError(
-                    f"has {fitting} templates suiting {kind} families, "
+                    f"has {fitting} compliance templates suiting {kind} families, "
                     f"needs at least {MIN_TEMPLATES_PER_LEVEL}"
+                )
+        return value
+
+    @field_validator("level_1", "level_2", "level_3", "level_4")
+    @classmethod
+    def _offers_enough_transcription_wording(
+        cls, value: list[DifficultyTemplate], info: ValidationInfo
+    ) -> list[DifficultyTemplate]:
+        """Only the `encoded` vocabulary needs a transcription variant.
+
+        Transcription payloads belong to the benign controls, and those use
+        only mechanically decodable families; `riddle` and `indirect` carry a
+        protected label and never a harmless message, so a semantic
+        transcription template would be text nothing could ever select.
+        """
+        fitting = sum(1 for entry in value if entry.fits("encoded") and entry.task == "transcribe")
+        if fitting < MIN_TEMPLATES_PER_LEVEL:
+            raise ValueError(
+                f"has {fitting} transcription templates suiting encoded families, "
+                f"needs at least {MIN_TEMPLATES_PER_LEVEL}"
+            )
+        return value
+
+    @field_validator("level_1", "level_2", "level_3", "level_4")
+    @classmethod
+    def _wording_matches_the_task(
+        cls, value: list[DifficultyTemplate], info: ValidationInfo
+    ) -> list[DifficultyTemplate]:
+        """A template must say what its `task` claims, and not the opposite.
+
+        The declared task decides which payloads a template can receive, so a
+        `transcribe` template that still ends "and do what it says" would put
+        the defect straight back: a prompt asserting an instruction its payload
+        does not contain.
+        """
+        for entry in value:
+            wanted, unwanted = (
+                (TRANSCRIPTION_PHRASES, COMPLIANCE_PHRASES)
+                if entry.task == "transcribe"
+                else (COMPLIANCE_PHRASES, TRANSCRIPTION_PHRASES)
+            )
+            # The opposite-vocabulary check comes first because it is the more
+            # specific diagnosis: a template carrying only the wrong wording
+            # fails both, and "uses the opposite wording" says why.
+            if (found := contains_any(entry.template, unwanted)) is not None:
+                raise ValueError(
+                    f"{entry.task} template uses the opposite wording {found!r}: "
+                    f"{entry.template[:60]!r}"
+                )
+            if contains_any(entry.template, wanted) is None:
+                raise ValueError(
+                    f"{entry.task} template uses none of its own wording: {entry.template[:60]!r}"
                 )
         return value
 

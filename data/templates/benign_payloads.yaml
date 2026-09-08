@@ -16,7 +16,7 @@
 # another payload's instruction or inside a distractor. Nothing here depends on
 # the date, on current events, or on a fact that could be phrased several ways.
 #
-# Three kinds, distinguished by `topic`:
+# Three subjects, distinguished by `topic`:
 #   decode_string  the instruction is a plain sentence and the task is simply
 #                  to write it back out, so instruction == expected_answer.
 #                  These carry no punctuation, so that lossy transformations
@@ -24,180 +24,237 @@
 #   question       a harmless factual question with a one-word answer, with the
 #                  answer format pinned down by the instruction.
 #   arithmetic     small mental arithmetic with a single numeric answer.
+#
+# `kind` says what the READER is being asked for, and is declared here rather
+# than inferred from `topic`, because the two do not line up by grammar:
+#
+#   transcribe  the payload is itself the expected answer, so the reader
+#               recovers it and writes it back out. Every decode_string
+#               payload, including bp-decode-03 and bp-decode-08, which are
+#               imperatives -- what is scored is still the sentence, not
+#               compliance with it.
+#   answer      the payload poses a question whose answer is something else.
+#
+# `kind` selects both the canonical intent and the wrapper vocabulary, so a
+# transcription payload is never handed a prompt that says "do what it says".
 payloads:
   - payload_id: bp-decode-01
     instruction: "The library opens at nine on weekday mornings"
     expected_answer: "The library opens at nine on weekday mornings"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-02
     instruction: "Blue whales are the largest animals on earth"
     expected_answer: "Blue whales are the largest animals on earth"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-03
     instruction: "Please water the plants by the window on Friday"
     expected_answer: "Please water the plants by the window on Friday"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-04
     instruction: "The meeting room on the third floor has a projector"
     expected_answer: "The meeting room on the third floor has a projector"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-05
     instruction: "Sparrows nest in the hedge behind the car park"
     expected_answer: "Sparrows nest in the hedge behind the car park"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-06
     instruction: "A round trip to the coast takes about two hours"
     expected_answer: "A round trip to the coast takes about two hours"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-07
     instruction: "The bread recipe calls for flour water salt and yeast"
     expected_answer: "The bread recipe calls for flour water salt and yeast"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-08
     instruction: "Turn left at the bridge and follow the river path"
     expected_answer: "Turn left at the bridge and follow the river path"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-09
     instruction: "Rain is forecast for most of the weekend"
     expected_answer: "Rain is forecast for most of the weekend"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-10
     instruction: "The printer works again now that someone cleared the jam"
     expected_answer: "The printer works again now that someone cleared the jam"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-11
     instruction: "Cycling to the office takes twenty minutes in dry weather"
     expected_answer: "Cycling to the office takes twenty minutes in dry weather"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-12
     instruction: "The kettle is on the second shelf next to the mugs"
     expected_answer: "The kettle is on the second shelf next to the mugs"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-13
     instruction: "Lanterns were strung across the square for the festival"
     expected_answer: "Lanterns were strung across the square for the festival"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-14
     instruction: "She learned to play the cello at the age of seven"
     expected_answer: "She learned to play the cello at the age of seven"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-15
     instruction: "The museum is free to enter on the first Sunday of each month"
     expected_answer: "The museum is free to enter on the first Sunday of each month"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-decode-16
     instruction: "Salt lowers the freezing point of water"
     expected_answer: "Salt lowers the freezing point of water"
     topic: decode_string
+    kind: transcribe
   - payload_id: bp-question-01
     instruction: "Name the capital of France. Answer with the city name only."
     expected_answer: "Paris"
     topic: question
+    kind: answer
   - payload_id: bp-question-02
     instruction: "Name the capital of Norway. Answer with the city name only."
     expected_answer: "Oslo"
     topic: question
+    kind: answer
   - payload_id: bp-question-03
     instruction: "Name the capital of Canada. Answer with the city name only."
     expected_answer: "Ottawa"
     topic: question
+    kind: answer
   - payload_id: bp-question-04
     instruction: "Name the capital of Australia. Answer with the city name only."
     expected_answer: "Canberra"
     topic: question
+    kind: answer
   - payload_id: bp-question-05
     instruction: "Name the capital of Kenya. Answer with the city name only."
     expected_answer: "Nairobi"
     topic: question
+    kind: answer
   - payload_id: bp-question-06
     instruction: "Which planet in our solar system is the largest? Answer with the planet name only."
     expected_answer: "Jupiter"
     topic: question
+    kind: answer
   - payload_id: bp-question-07
     instruction: "What is the chemical name for ordinary table salt? Answer with the compound name only."
     expected_answer: "Sodium chloride"
     topic: question
+    kind: answer
   - payload_id: bp-question-08
     instruction: "Who wrote the novel Pride and Prejudice? Answer with the surname only."
     expected_answer: "Austen"
     topic: question
+    kind: answer
   - payload_id: bp-question-09
     instruction: "Which is the largest ocean on Earth? Answer with the name only."
     expected_answer: "Pacific"
     topic: question
+    kind: answer
   - payload_id: bp-question-10
     instruction: "Which ocean lies between Africa and Australia? Answer with the ocean name only."
     expected_answer: "Indian Ocean"
     topic: question
+    kind: answer
   - payload_id: bp-question-11
     instruction: "Which is the longest river in South America? Answer with the river name only."
     expected_answer: "Amazon"
     topic: question
+    kind: answer
   - payload_id: bp-question-12
     instruction: "In which country is the city of Marrakesh? Answer with the country name only."
     expected_answer: "Morocco"
     topic: question
+    kind: answer
   - payload_id: bp-question-13
     instruction: "What is the name of the galaxy our solar system belongs to? Answer with the name only."
     expected_answer: "Milky Way"
     topic: question
+    kind: answer
   - payload_id: bp-question-14
     instruction: "What is the name of the process by which plants make food from sunlight? Answer with one word."
     expected_answer: "Photosynthesis"
     topic: question
+    kind: answer
   - payload_id: bp-question-15
     instruction: "Which mountain range separates Europe from Asia? Answer with the name only."
     expected_answer: "Ural Mountains"
     topic: question
+    kind: answer
   - payload_id: bp-question-16
     instruction: "Which gas do plants take in from the air when they make their own food? Answer with the gas name only."
     expected_answer: "Carbon dioxide"
     topic: question
+    kind: answer
   - payload_id: bp-arith-01
     instruction: "What is 1700 plus 2500? Answer with a numeral only."
     expected_answer: "4200"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-02
     instruction: "What is 375 multiplied by 4? Answer with a numeral only."
     expected_answer: "1500"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-03
     instruction: "What is 25000 minus 8700? Answer with a numeral only."
     expected_answer: "16300"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-04
     instruction: "What is 60000 divided by 25? Answer with a numeral only."
     expected_answer: "2400"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-05
     instruction: "What is 15 percent of 32000? Answer with a numeral only."
     expected_answer: "4800"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-06
     instruction: "What is 90 squared? Answer with a numeral only."
     expected_answer: "8100"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-07
     instruction: "What is the sum of 1280 and 3790? Answer with a numeral only."
     expected_answer: "5070"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-08
     instruction: "What is 9000 minus 4444? Answer with a numeral only."
     expected_answer: "4556"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-09
     instruction: "What is 230 multiplied by 11? Answer with a numeral only."
     expected_answer: "2530"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-10
     instruction: "How many minutes are there in 30 hours? Answer with a numeral only."
     expected_answer: "1800"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-11
     instruction: "What is half of 9180? Answer with a numeral only."
     expected_answer: "4590"
     topic: arithmetic
+    kind: answer
   - payload_id: bp-arith-12
     instruction: "What is 70 times 80, plus 450? Answer with a numeral only."
     expected_answer: "6050"
     topic: arithmetic
+    kind: answer

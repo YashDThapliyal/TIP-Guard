@@ -68,19 +68,34 @@ def _cross_table(cases: Sequence[BenchmarkCase], column: str, header: str) -> st
     return _table(header, columns, rows)
 
 
+def _split_table(cases: Sequence[BenchmarkCase]) -> str:
+    """Cases per split, with the block/allow balance inside each.
+
+    The balance is here rather than left to the reader because two split
+    conditions contain no allow-side cases at all, and a table of totals alone
+    hides that.
+    """
+    header = ["split", "cases", "expect block", "expect allow"]
+    lines = [_row(header), _row(["---"] * len(header))]
+    for name in sorted({case.split.value for case in cases}):
+        members = [case for case in cases if case.split.value == name]
+        decisions = Counter(case.expected_decision.value for case in members)
+        lines.append(
+            _row([name, str(len(members)), str(decisions["block"]), str(decisions["allow"])])
+        )
+    return "\n".join(lines)
+
+
 def format_stats(cases: Sequence[BenchmarkCase], digest: str) -> str:
     """The composition of a dataset as Markdown, ready to paste into the card."""
-    splits = Counter(case.split.value for case in cases)
-    split_rows = [_row(["split", "cases"]), _row(["---", "---"])]
-    split_rows += [_row([name, str(splits[name])]) for name in sorted(splits)]
     return "\n\n".join(
         (
             "### Case type by transformation",
             _cross_table(cases, "transformation", "case type"),
             "### Case type by difficulty",
             _cross_table(cases, "difficulty", "case type"),
-            "### Split",
-            "\n".join(split_rows),
+            "### Splits",
+            _split_table(cases),
             f"total: {len(cases)}",
             f"sha256: {digest}",
         )
