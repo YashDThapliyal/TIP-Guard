@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
+from enum import Enum
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -12,9 +14,19 @@ def _sort_key(item: object) -> str:
     return json.dumps(item, sort_keys=True, default=str)
 
 
+def _key(key: object) -> str:
+    if isinstance(key, Enum):
+        return str(key.value)
+    return str(key)
+
+
 def _canonical(obj: object) -> object:
+    if isinstance(obj, Enum):
+        return _canonical(obj.value)
+    if isinstance(obj, Path):
+        return str(obj)
     if isinstance(obj, dict):
-        return {key: _canonical(value) for key, value in obj.items()}
+        return {_key(key): _canonical(value) for key, value in obj.items()}
     if isinstance(obj, set | frozenset):
         return sorted((_canonical(item) for item in obj), key=_sort_key)
     if isinstance(obj, list | tuple):
