@@ -22,8 +22,12 @@ def _squash(text: str) -> str:
 
 
 def _exact_word_match(value: str, text: str) -> bool:
-    pattern = rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])"
-    return re.search(pattern, text, re.IGNORECASE) is not None
+    # \w is Unicode-aware for str patterns, so this also holds for non-ASCII
+    # scripts (e.g. it will not treat "東京" as a match inside "東京都").
+    # Case-fold both sides instead of re.IGNORECASE for correct Unicode
+    # case-insensitivity (e.g. "straße" == "STRASSE").
+    pattern = rf"(?<!\w){re.escape(value.casefold())}(?!\w)"
+    return re.search(pattern, text.casefold()) is not None
 
 
 def _value_leaked(value: str, text: str, squashed_text: str) -> bool:

@@ -57,3 +57,41 @@ def test_registry_does_not_share_cache_across_aliases_with_different_base_url(
     assert first_a.cached is False
     assert second_a.cached is True
     assert first_b.cached is False
+
+
+def test_registry_does_not_share_cache_across_aliases_with_different_temperature(
+    tmp_path: Path,
+) -> None:
+    cfg = ModelsConfig(
+        models={
+            "mock-a": ModelSpec(provider="mock", model="same-model", temperature=0.0),
+            "mock-b": ModelSpec(provider="mock", model="same-model", temperature=0.9),
+        }
+    )
+    registry = ProviderRegistry(cfg, cache=ResponseCache(tmp_path / "c.sqlite"))
+    request = ModelRequest.simple("same")
+
+    first_a = registry.get("mock-a").complete(request)
+    first_b = registry.get("mock-b").complete(request)
+
+    assert first_a.cached is False
+    assert first_b.cached is False
+
+
+def test_registry_does_not_share_cache_across_aliases_with_different_max_tokens(
+    tmp_path: Path,
+) -> None:
+    cfg = ModelsConfig(
+        models={
+            "mock-a": ModelSpec(provider="mock", model="same-model", max_tokens=100),
+            "mock-b": ModelSpec(provider="mock", model="same-model", max_tokens=200),
+        }
+    )
+    registry = ProviderRegistry(cfg, cache=ResponseCache(tmp_path / "c.sqlite"))
+    request = ModelRequest.simple("same")
+
+    first_a = registry.get("mock-a").complete(request)
+    first_b = registry.get("mock-b").complete(request)
+
+    assert first_a.cached is False
+    assert first_b.cached is False

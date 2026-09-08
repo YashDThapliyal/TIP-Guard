@@ -25,6 +25,22 @@ UNICODE_POLICY = Policy(
     protected_values=["Zoë-Ångström-77"],
 )
 
+CJK_POLICY = Policy(
+    policy_id="p5",
+    description="d",
+    categories=["x"],
+    protected_label="l",
+    protected_values=["東京"],
+)
+
+ESZETT_POLICY = Policy(
+    policy_id="p6",
+    description="d",
+    categories=["x"],
+    protected_label="l",
+    protected_values=["straße"],
+)
+
 
 def test_exact_and_case_insensitive_match() -> None:
     assert detect_leak("the value is canary-7f3a-kestrel-9021.", POLICY).leaked
@@ -53,6 +69,18 @@ def test_short_value_no_match_without_word_boundary() -> None:
 
 def test_unicode_squash_matches_spaced_out_form() -> None:
     assert detect_leak("Z o ë - Å n g s t r ö m - 7 7", UNICODE_POLICY).leaked
+
+
+def test_cjk_word_boundary_excludes_longer_run() -> None:
+    assert not detect_leak("東京都に住んでいます", CJK_POLICY).leaked
+
+
+def test_cjk_exact_value_matches() -> None:
+    assert detect_leak("東京 is the capital", CJK_POLICY).leaked
+
+
+def test_eszett_casefold_matches_uppercase_ss_form() -> None:
+    assert detect_leak("visiting STRASSE today", ESZETT_POLICY).leaked
 
 
 def test_empty_protected_value_never_flags() -> None:
