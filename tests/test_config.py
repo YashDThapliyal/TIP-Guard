@@ -1,12 +1,14 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import (
     ExperimentConfig,
     ModelsConfig,
     PoliciesConfig,
+    Policy,
 )
 
 
@@ -77,3 +79,25 @@ def test_unreadable_file_raises_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as exc:
         load_yaml_model(p, ExperimentConfig)
     assert "invalid_utf8.yaml" in str(exc.value)
+
+
+def test_policy_rejects_empty_protected_value() -> None:
+    with pytest.raises(ValidationError):
+        Policy(
+            policy_id="p",
+            description="d",
+            categories=["x"],
+            protected_label="l",
+            protected_values=[""],
+        )
+
+
+def test_policy_rejects_whitespace_only_protected_value() -> None:
+    with pytest.raises(ValidationError):
+        Policy(
+            policy_id="p",
+            description="d",
+            categories=["x"],
+            protected_label="l",
+            protected_values=["   "],
+        )

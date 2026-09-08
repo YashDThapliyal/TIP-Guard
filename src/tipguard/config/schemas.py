@@ -1,11 +1,13 @@
 """Pydantic schemas for every YAML configuration file TIP-Guard reads."""
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 ProviderName = Literal["mock", "openai", "anthropic", "ollama"]
+
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class FrozenModel(BaseModel):
@@ -30,7 +32,7 @@ class Policy(FrozenModel):
     policy_id: str
     description: str
     categories: list[str]
-    protected_values: list[str] = Field(min_length=1)
+    protected_values: list[NonEmptyStr] = Field(min_length=1)
     protected_label: str
 
 

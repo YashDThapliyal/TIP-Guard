@@ -78,6 +78,26 @@ def test_openai_provider_wraps_errors() -> None:
         OpenAIProvider(spec, client=FakeOpenAIClient(fail=True)).complete(ModelRequest.simple("q"))
 
 
+def test_openai_provider_falls_back_to_spec_temperature_and_max_tokens() -> None:
+    spec = ModelSpec(provider="openai", model="m", max_tokens=333, temperature=0.7)
+    client = FakeOpenAIClient()
+    OpenAIProvider(spec, client=client).complete(ModelRequest.simple("q"))
+    call = client.calls[0]
+    assert call["max_tokens"] == 333
+    assert call["temperature"] == 0.7
+
+
+def test_openai_provider_request_overrides_spec_temperature_and_max_tokens() -> None:
+    spec = ModelSpec(provider="openai", model="m", max_tokens=333, temperature=0.7)
+    client = FakeOpenAIClient()
+    OpenAIProvider(spec, client=client).complete(
+        ModelRequest.simple("q", temperature=0.1, max_tokens=42)
+    )
+    call = client.calls[0]
+    assert call["max_tokens"] == 42
+    assert call["temperature"] == 0.1
+
+
 def test_anthropic_provider_maps_system_and_text_blocks() -> None:
     spec = ModelSpec(provider="anthropic", model="m")
     client = FakeAnthropicClient()
@@ -98,6 +118,20 @@ def test_anthropic_provider_omits_temperature() -> None:
     call = client.calls[0]
     assert "temperature" not in call
     assert set(call) == {"model", "system", "messages", "max_tokens"}
+
+
+def test_anthropic_provider_falls_back_to_spec_max_tokens() -> None:
+    spec = ModelSpec(provider="anthropic", model="m", max_tokens=333)
+    client = FakeAnthropicClient()
+    AnthropicProvider(spec, client=client).complete(ModelRequest.simple("q"))
+    assert client.calls[0]["max_tokens"] == 333
+
+
+def test_anthropic_provider_request_overrides_spec_max_tokens() -> None:
+    spec = ModelSpec(provider="anthropic", model="m", max_tokens=333)
+    client = FakeAnthropicClient()
+    AnthropicProvider(spec, client=client).complete(ModelRequest.simple("q", max_tokens=42))
+    assert client.calls[0]["max_tokens"] == 42
 
 
 def test_anthropic_provider_json_instruction_targets_last_user_when_no_system() -> None:

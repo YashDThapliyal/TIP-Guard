@@ -18,8 +18,10 @@ class Message(BaseModel):
 class ModelRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
     messages: tuple[Message, ...]
-    temperature: float = 0.0
-    max_tokens: int = 1024
+    # None means "use the provider's ModelSpec default" — see OpenAIProvider
+    # and AnthropicProvider .complete().
+    temperature: float | None = None
+    max_tokens: int | None = None
     response_format: Literal["text", "json"] = "text"
 
     @classmethod
@@ -27,8 +29,8 @@ class ModelRequest(BaseModel):
         cls,
         user: str,
         system: str | None = None,
-        temperature: float = 0.0,
-        max_tokens: int = 1024,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         response_format: Literal["text", "json"] = "text",
     ) -> "ModelRequest":
         messages: list[Message] = []

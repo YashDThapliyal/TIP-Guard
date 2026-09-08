@@ -54,13 +54,14 @@ class AnthropicProvider:
                 system = system + JSON_INSTRUCTION
             else:
                 messages = _append_to_last_user(messages)
+        max_tokens = request.max_tokens if request.max_tokens is not None else self.spec.max_tokens
         started = time.perf_counter()
         try:
             result = self.client.messages.create(
                 model=self.model,
                 system=system,
                 messages=messages,
-                max_tokens=request.max_tokens,
+                max_tokens=max_tokens,
             )
         except Exception as exc:
             raise ProviderError(f"{self.name}/{self.model}: {exc}") from exc

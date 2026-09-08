@@ -49,11 +49,15 @@ class OpenAIProvider:
         is_json = request.response_format == "json"
         if is_json:
             messages = _with_json_instruction(messages)
+        temperature = (
+            request.temperature if request.temperature is not None else self.spec.temperature
+        )
+        max_tokens = request.max_tokens if request.max_tokens is not None else self.spec.max_tokens
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         if is_json:
             kwargs["response_format"] = {"type": "json_object"}
