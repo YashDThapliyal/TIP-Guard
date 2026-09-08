@@ -69,3 +69,29 @@ Ruling: the implementer's own concern 1 was confirmed by Codex and by my audit, 
 Task 4: fix round 1/3 (3 addressed, 0 open; commits 08d2608..9a9d36a)
 Task 4: minor (deferred): the code family's replace_chain style leaves much of the instruction in plaintext, which will inflate its block rate; phrasing_index means the intent index for some case types and a bank index for others.
 Task 4: complete (commits ac4e83c..9a9d36a, review clean)
+[CLAUDE_IMPLEMENTER] [DONE] Task 5 (f32edae): SplitConfig, assign_splits, manifests, tipguard split.
+[CLAUDE_REVIEWER] [REQUEST_CHANGES] Task 5: CRITICAL — the paraphrase hold-out leaked in plaintext, because rule 4 was gated on TIP while direct cases carry the same intent and phrasing and are the unencoded form of the same sentence; 9 reserved phrasings sat in train/dev/test. Also: heldout_policy and heldout_paraphrase contain no allow-side cases at all; a report line misdescribed 8 direct attacks as benign-adjacent; rule 1 missed families composed inside multi-step; dev starved for small strata; README overclaimed.
+[CODEX_REVIEWER] [REQUEST_CHANGES] Task 5: same P1 leak, found independently; plus stale manifests for emptied splits, and split ignoring a custom policies file for redaction.
+[CLAUDE_IMPLEMENTER] [FIX] round 1 (513b882): 8 items; heldout_paraphrase 90 → 99 as the 9 plaintext cases moved in.
+[CLAUDE_REVIEWER] [APPROVE] round 1. [CODEX_REVIEWER] [REQUEST_CHANGES] round 1: half-parseable multi-step params could still leak a family; atomic write regressed the dataset to owner-only.
+[CLAUDE_IMPLEMENTER] [FIX] round 2 (26a5698): independent family extraction, file mode preserved.
+[CLAUDE_REVIEWER] [APPROVE] round 2. [CODEX_REVIEWER] [REQUEST_CHANGES] round 2: clearing the process umask to probe it is a race.
+[CLAUDE_IMPLEMENTER] [FIX] round 3 (67f5e17): umask helper removed, kernel applies it via os.open.
+[CODEX_REVIEWER] [REQUEST_CHANGES] round 3 P1: the temp file held dataset content at a broader mode than the destination during serialization.
+Ruling at the 3-round cap: closed the ordering bug myself rather than a fourth review pair (df2b0a0), since it is a data-exposure window and a single statement move. Verified: dataset mode 644, no os.umask anywhere, counts and md5 unchanged. Cost if wrong: none identified.
+Task 5: fix round 1/3 (8 addressed, 2 new open); round 2/3 (2 addressed, 1 new open); round 3/3 (1 addressed, 1 adjudicated in)
+Task 5: minor (deferred): heldout_policy and heldout_paraphrase are block-only so no false-positive rate can be computed inside them, now stated in the splits README; 48 of 384 transformation cases are also held-out-policy cases and so are doubly held out.
+Task 5: complete (commits 9a9d36a..df2b0a0, review clean)
+[CLAUDE_IMPLEMENTER] [DONE] Task 6 (99308b1): gold sampling, dataset-stats, dataset card, 170-case review; found and fixed at source that every benign control claimed an intent false of its 16 transcription payloads.
+[CLAUDE_REVIEWER] [REQUEST_CHANGES] Task 6: the fix was half-applied — canonical_intent was corrected but the level-one wrapper still asserted a request over statement payloads, leaving 31 prompts contradicting their own intent, one of them passed in the sample; review notes were templated, five shapes across 170, one sentence repeated 18 times with an intent truncated mid-word; three card claims wrong.
+[CODEX_REVIEWER] [REQUEST_CHANGES] Task 6: the mirror problem — classifying by topic mislabels the two imperative decode payloads; the phrasing-index caveat was incomplete.
+Ruling: both findings dissolve if the distinction is declared rather than inferred and applied everywhere the task is described, so BenignPayload gained an explicit kind driving the intent, the level-one hint and the wrapper vocabulary at all four levels.
+[CLAUDE_IMPLEMENTER] [FIX] round 1 (04f5d15): kind field, task axis, 16 transcription wrappers, four validators, notes rewritten, card corrected. Dataset 1699 → 1700.
+[CLAUDE_REVIEWER] [APPROVE] round 1: mutation probe confirmed the vocabulary tests are load-bearing (stripping the task argument takes compliance-wording transcribe prompts from 0 to 113); sample matches the regenerated dataset byte for byte.
+[CODEX_REVIEWER] [REQUEST_CHANGES] round 1: kind is declared but never checked against what the case actually scores.
+[CLAUDE_IMPLEMENTER] [FIX] round 2 (8cd45d7): model validator enforcing that transcribe means the expected answer is the instruction and answer means it is not.
+[CLAUDE_REVIEWER] [APPROVE] round 2. [CODEX_REVIEWER] [APPROVE] round 2.
+Task 6: fix round 1/3 (6 addressed, 1 new open); round 2/3 (4 addressed, 0 open)
+Task 6: minor (deferred): the compliance and transcription phrase lists are hand-maintained exact substrings, so a future wrapper with novel wording would pass the validators; code/replace_chain leaves 85-97% of the instruction legible, a construct-validity limit on that family's block rate, recorded in the card.
+Task 6: complete (commits df2b0a0..8cd45d7, review clean)
+ALL SIX TASKS COMPLETE — Phase 2 done.
