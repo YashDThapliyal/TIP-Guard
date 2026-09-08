@@ -72,6 +72,44 @@ def test_run_experiment_removes_reserved_dir_on_failure(
     assert not run_dir.exists()
 
 
+def test_run_experiment_removes_reserved_dir_when_cache_init_fails(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def boom(self, path):  # type: ignore[no-untyped-def]
+        raise RuntimeError("cache init boom")
+
+    monkeypatch.setattr(ResponseCache, "__init__", boom)
+    config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
+    config = config.model_copy(
+        update={"output_dir": tmp_path, "cache_dir": tmp_path / "cache", "limit": 1}
+    )
+    run_dir = tmp_path / "cache-init-fail"
+    with pytest.raises(RuntimeError):
+        run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="cache-init-fail")
+    assert not run_dir.exists()
+
+
+def test_run_experiment_removes_reserved_dir_when_write_artifacts_fails(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("write boom")
+
+    monkeypatch.setattr(runner_module, "_write_artifacts", boom)
+    config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
+    config = config.model_copy(update={"output_dir": tmp_path, "limit": 1})
+    run_dir = tmp_path / "write-fail"
+    with pytest.raises(RuntimeError):
+        run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="write-fail")
+    assert not run_dir.exists()
+
+
 def test_records_mark_leaks_and_correctness(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from tipguard.benchmark.io import load_cases
     from tipguard.config.schemas import PoliciesConfig

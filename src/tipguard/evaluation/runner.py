@@ -157,6 +157,31 @@ def run_experiment(
     output_dir = Path(os.environ.get(OUTPUT_DIR_ENV) or config.output_dir)
     run_dir = output_dir / resolved_run_id
     _reserve_run_dir(run_dir)
+    try:
+        records, summary, manifest = _evaluate_and_build_manifest(
+            config, models, policies, cases, config_path, resolved_run_id, now, output_dir
+        )
+        _write_artifacts(run_dir, records, summary, manifest)
+    except Exception:
+        _release_run_dir_if_empty(run_dir)
+        raise
+    return RunArtifacts(resolved_run_id, run_dir, summary, records)
+
+
+def _evaluate_and_build_manifest(
+    config: ExperimentConfig,
+    models: ModelsConfig,
+    policies: PoliciesConfig,
+    cases: Sequence[BenchmarkCase],
+    config_path: Path,
+    resolved_run_id: str,
+    now: datetime,
+    output_dir: Path,
+) -> tuple[tuple[CaseRecord, ...], RunSummary, dict[str, object]]:
+    """Build the cache/registry/guardrail, evaluate every case, and return the
+    records/summary/manifest. Closes the response cache (if any) whether
+    evaluation succeeds or raises; the caller decides what to do on failure.
+    """
     cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
     try:
         registry = ProviderRegistry(models, cache=cache)
@@ -166,11 +191,7 @@ def run_experiment(
         _log_records(records)
         summary = summarize(records)
         manifest = _build_manifest(config, config_path, resolved_run_id, now, registry, output_dir)
-    except Exception:
-        _release_run_dir_if_empty(run_dir)
-        raise
+        return records, summary, manifest
     finally:
         if cache is not None:
             cache.close()
-    _write_artifacts(run_dir, records, summary, manifest)
-    return RunArtifacts(resolved_run_id, run_dir, summary, records)
