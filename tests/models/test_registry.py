@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tipguard.config.loader import load_yaml_model
+from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ModelsConfig, ModelSpec
 from tipguard.models.cache import ResponseCache
 from tipguard.models.registry import ProviderRegistry
@@ -16,10 +16,16 @@ def test_registry_builds_mock_and_memoises(repo_root: Path) -> None:
     assert registry.get("mock-main").name == "mock"
 
 
-def test_registry_unknown_alias(repo_root: Path) -> None:
+def test_registry_unknown_alias_raises_config_error(repo_root: Path) -> None:
     cfg = load_yaml_model(repo_root / "configs" / "models.yaml", ModelsConfig)
-    with pytest.raises(KeyError):
+    with pytest.raises(ConfigError, match="unknown model alias 'nope'"):
         ProviderRegistry(cfg).get("nope")
+
+
+def test_registry_unknown_alias_lists_known_aliases(repo_root: Path) -> None:
+    cfg = load_yaml_model(repo_root / "configs" / "models.yaml", ModelsConfig)
+    with pytest.raises(ConfigError, match="mock-main"):
+        ProviderRegistry(cfg).spec("nope")
 
 
 def test_registry_wraps_with_cache(repo_root: Path, tmp_path: Path) -> None:

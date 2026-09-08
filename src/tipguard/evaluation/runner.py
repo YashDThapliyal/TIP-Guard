@@ -47,8 +47,11 @@ def _sha256_file(path: Path) -> str:
 
 
 def _ensure_model_alias(config: ExperimentConfig, models: ModelsConfig) -> None:
-    if config.main_model not in models.models:
-        raise ConfigError(f"{config.models_config}: unknown model alias {config.main_model!r}")
+    """Fail fast on an unknown main-model alias, before any run directory or
+    response cache is created. Delegates to `ProviderRegistry.spec`, which owns
+    the error message, so the alias check lives in exactly one place.
+    """
+    ProviderRegistry(models).spec(config.main_model)
 
 
 def _ensure_dataset_valid(
@@ -185,8 +188,7 @@ def _evaluate_and_build_manifest(
     cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
     try:
         registry = ProviderRegistry(models, cache=cache)
-        main_model = registry.get(config.main_model)
-        guardrail = build_guardrail(config.defense, main_model, policies)
+        guardrail = build_guardrail(config.defense, registry, config.main_model, policies)
         records = tuple(evaluate_case(case, guardrail, policies) for case in cases)
         _log_records(records)
         summary = summarize(records)
