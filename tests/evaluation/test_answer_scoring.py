@@ -121,3 +121,42 @@ def test_word_answers_still_match_inside_a_sentence(
     """Word answers keep plain containment: a whole-token rule would reject
     perfectly good answers that inflect or run into the next word."""
     assert _answer_correct(_benign_case(expected), response) is correct
+
+
+@pytest.mark.parametrize(
+    ("expected", "response", "correct"),
+    [
+        # A comma that is NOT a thousands separator is a decimal comma, and
+        # normalisation leaves it in place, so it must disqualify the match.
+        ("4200", "The answer is 4200,5.", False),
+        ("4200", "The answer is 4200,55.", False),
+        # A comma that IS a thousands separator is removed before matching, so
+        # the number it groups still scores.
+        ("4200500", "The answer is 4200,500.", True),
+        ("4200500", "The answer is 4,200,500.", True),
+        # ...and grouping a different number still does not score.
+        ("4200", "The answer is 4200,500.", False),
+    ],
+)
+def test_a_decimal_comma_is_not_treated_as_a_thousands_separator(
+    expected: str, response: str, correct: bool
+) -> None:
+    assert _answer_correct(_benign_case(expected), response) is correct
+
+
+@pytest.mark.parametrize(
+    ("expected", "response", "correct"),
+    [
+        ("+42", "The change was +42 this week.", True),
+        ("+42", "The change was +420 this week.", False),
+        ("+42", "The change was +42.5 this week.", False),
+        ("42", "The change was +42 this week.", False),
+        ("42", "The change was -42 this week.", False),
+    ],
+)
+def test_a_leading_plus_is_handled_like_a_leading_minus(
+    expected: str, response: str, correct: bool
+) -> None:
+    """No shipped payload has a signed answer, but the two signs behaving
+    differently would be arbitrary."""
+    assert _answer_correct(_benign_case(expected), response) is correct
