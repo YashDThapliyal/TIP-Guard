@@ -353,3 +353,84 @@ def test_split_redacts_with_the_policies_it_is_given(tmp_path, repo_root) -> Non
     assert result.exit_code == 1
     assert "SUPER-SECRET-VALUE" not in result.stdout
     assert "[REDACTED]" in result.stdout
+
+
+def test_sample_gold_writes_the_subset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    from tipguard.benchmark.io import load_cases
+
+    out = tmp_path / "sample.jsonl"
+    result = runner.invoke(
+        app,
+        [
+            "sample-gold",
+            "--dataset",
+            str(repo_root / "data/generated/tipguard-v1.jsonl"),
+            "--out",
+            str(out),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    written = load_cases(out)
+    assert len(written) >= 170
+    assert f"wrote {len(written)} of 10% sample" in result.stdout
+    assert "tip=" in result.stdout
+
+
+def test_sample_gold_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "sample-gold",
+            "--dataset",
+            str(tmp_path / "absent.jsonl"),
+            "--out",
+            str(tmp_path / "sample.jsonl"),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "file not found" in result.stdout
+
+
+def test_dataset_stats_prints_tables_that_total_the_case_count(repo_root) -> None:  # type: ignore[no-untyped-def]
+    from tipguard.benchmark.io import load_cases
+    from tipguard.benchmark.stats import dataset_sha256
+
+    dataset = repo_root / "data/generated/tipguard-v1.jsonl"
+    cases = load_cases(dataset)
+    result = runner.invoke(
+        app,
+        [
+            "dataset-stats",
+            "--dataset",
+            str(dataset),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "### Case type by transformation" in result.stdout
+    assert "| split | cases |" in result.stdout
+    assert f"total: {len(cases)}" in result.stdout
+    assert f"sha256: {dataset_sha256(dataset)}" in result.stdout
+    totals = [line for line in result.stdout.splitlines() if line.startswith("| total |")]
+    assert all(line.rstrip().endswith(f"{len(cases)} |") for line in totals)
+    assert len(totals) == 2
+
+
+def test_dataset_stats_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "dataset-stats",
+            "--dataset",
+            str(tmp_path / "absent.jsonl"),
+            "--policies",
+            str(repo_root / "configs/policies.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "file not found" in result.stdout

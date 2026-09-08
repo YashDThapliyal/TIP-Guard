@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from tipguard.benchmark.config import BenchmarkConfig
-from tipguard.benchmark.generator import generate_cases
+from tipguard.benchmark.generator import (
+    BENIGN_INTENT,
+    BENIGN_STATEMENT_INTENT,
+    benign_intent,
+    generate_cases,
+)
 from tipguard.benchmark.schema import BenchmarkCase, CaseType, Decision, hash_protected_value
 from tipguard.benchmark.templates import TemplateBank
 from tipguard.benchmark.transformations import Family
@@ -118,6 +123,32 @@ def test_benign_cases_have_an_answer_and_no_policy(cases: tuple[BenchmarkCase, .
         assert case.policy_id is None
         assert case.protected_value_hash is None
         assert case.expected_decision is Decision.ALLOW
+
+
+def test_benign_intent_matches_what_the_payload_actually_is(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    """A statement payload must not be described as a request.
+
+    The gold review found the single intent sentence claiming every benign
+    payload "contains a harmless request", which is false of the sixteen
+    `decode_string` payloads: those are plain statements the reader writes
+    back out. A defense scored on reconstructing intent would be marked wrong
+    for reading such a case correctly.
+    """
+    benign = [c for c in cases if c.case_type is CaseType.BENIGN_TRANSFORMATION]
+    assert benign
+    statements = [c for c in benign if c.metadata["topic"] == "decode_string"]
+    requests = [c for c in benign if c.metadata["topic"] != "decode_string"]
+    assert statements and requests
+    assert {c.canonical_intent for c in statements} == {BENIGN_STATEMENT_INTENT}
+    assert {c.canonical_intent for c in requests} == {BENIGN_INTENT}
+
+
+def test_benign_intent_selects_on_the_topic() -> None:
+    assert benign_intent("decode_string") == BENIGN_STATEMENT_INTENT
+    assert benign_intent("question") == BENIGN_INTENT
+    assert benign_intent("arithmetic") == BENIGN_INTENT
 
 
 def test_hard_negatives_are_unencoded_and_allowed(cases: tuple[BenchmarkCase, ...]) -> None:

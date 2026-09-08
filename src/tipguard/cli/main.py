@@ -12,9 +12,11 @@ from tipguard import __version__
 from tipguard.benchmark.config import BenchmarkConfig
 from tipguard.benchmark.dedupe import dedupe_cases
 from tipguard.benchmark.generator import generate_cases
+from tipguard.benchmark.gold import DEFAULT_GOLD_FRACTION, sample_gold
 from tipguard.benchmark.io import DatasetError, load_cases, write_cases
 from tipguard.benchmark.schema import BenchmarkCase
 from tipguard.benchmark.splits import SplitConfig, assign_splits, write_manifests
+from tipguard.benchmark.stats import dataset_sha256, format_stats
 from tipguard.benchmark.templates import TemplateBank
 from tipguard.benchmark.validate import ValidationIssue, validate_cases
 from tipguard.config.loader import ConfigError, load_yaml_model
@@ -29,6 +31,7 @@ DEFAULT_POLICIES = Path("configs/policies.yaml")
 DEFAULT_DATASET = Path("data/generated/tipguard-v1.jsonl")
 DEFAULT_SPLITS_CONFIG = Path("configs/splits.yaml")
 DEFAULT_SPLITS_DIR = Path("data/splits")
+DEFAULT_GOLD_SAMPLE = Path("data/labels/gold-sample.jsonl")
 
 
 def _protected_values(policies_path: Path) -> tuple[str, ...]:
@@ -236,6 +239,52 @@ def split(
     typer.echo(f"wrote {len(cases)} cases to {dataset} and manifests to {out_dir}")
     for name, count in counts.items():
         typer.echo(f"{name} {count}")
+
+
+@app.command("sample-gold")
+def sample_gold_command(
+    dataset: Annotated[
+        Path, typer.Option("--dataset", help="Benchmark JSONL to sample from.")
+    ] = DEFAULT_DATASET,
+    out: Annotated[
+        Path, typer.Option("--out", help="Where the sampled cases are written.")
+    ] = DEFAULT_GOLD_SAMPLE,
+    fraction: Annotated[
+        float, typer.Option("--fraction", help="Share of the dataset to sample.", min=0, max=1)
+    ] = DEFAULT_GOLD_FRACTION,
+    policies: Annotated[
+        Path, typer.Option(help="Policies YAML, used only to redact error messages.")
+    ] = DEFAULT_POLICIES,
+) -> None:
+    """Write the stratified gold subset so a reviewer can read the prompts."""
+    protected = _protected_values(policies)
+    try:
+        sampled = sample_gold(load_cases(dataset), fraction=fraction)
+        _write_dataset(out, sampled)
+    except (DatasetError, ValueError) as exc:
+        _echo(str(exc), protected)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(sampled)} of {fraction:.0%} sample to {out}")
+    typer.echo(_type_counts(sampled))
+
+
+@app.command("dataset-stats")
+def dataset_stats(
+    dataset: Annotated[
+        Path, typer.Option("--dataset", help="Benchmark JSONL to describe.")
+    ] = DEFAULT_DATASET,
+    policies: Annotated[
+        Path, typer.Option(help="Policies YAML, used only to redact error messages.")
+    ] = DEFAULT_POLICIES,
+) -> None:
+    """Print the dataset's composition as Markdown, with its sha256."""
+    try:
+        cases = load_cases(dataset)
+        report = format_stats(cases, dataset_sha256(dataset))
+    except DatasetError as exc:
+        _echo(str(exc), _protected_values(policies))
+        raise typer.Exit(code=1) from exc
+    typer.echo(report)
 
 
 if __name__ == "__main__":
