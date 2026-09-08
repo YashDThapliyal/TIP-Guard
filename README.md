@@ -51,6 +51,13 @@ Validate a benchmark dataset against the schema and a policies file:
 uv run tipguard validate-dataset data/generated/smoke.jsonl
 ```
 
+`validate-dataset` accepts `--policies PATH` to check the dataset against a policies file other
+than the default `configs/policies.yaml` (every `policy_id` in the dataset must exist in it):
+
+```bash
+uv run tipguard validate-dataset data/generated/smoke.jsonl --policies configs/policies.yaml
+```
+
 Run an experiment configuration end to end:
 
 ```bash
@@ -61,14 +68,19 @@ uv run tipguard evaluate --config experiments/smoke-test.yaml
 timestamp, and a hash of the resolved config) and `--limit N` to evaluate only the first `N`
 cases. It seeds the run, loads the dataset and provider config, runs every case through the
 configured guardrail, prints the run directory and a compact per-case-type summary table
-(`type count blocked leaked correct`), and exits 1 with the error message if the config or
-dataset is invalid or a provider call fails.
+(`type count blocked leaked correct_decision`), and exits 1 with the error message if the
+config or dataset is invalid or a provider call fails. Echoed error messages are redacted
+against the protected values in the run's policies file whenever that file can be loaded.
 
 Each run writes to `<output_dir>/<run_id>/` (`output_dir` defaults to `reports/runs`, which is
 git-ignored):
 
-- `results.jsonl` — one `CaseRecord` JSON object per line, in dataset order.
+- `results.jsonl` — one `CaseRecord` JSON object per line, in dataset order. Each record's
+  `leaked_policy_ids` lists every policy whose protected values appeared in the response; a
+  response is checked against all policies, not only the one the case targeted.
 - `summary.json` — the aggregate `RunSummary` (per-case-type counts, cost, latency percentiles).
+  Latency percentiles cover uncached calls only (`latency_uncached_count` says how many), so a
+  cache-served re-run does not report an artificially fast run.
 - `manifest.json` — run metadata: `run_id`, `created_at`, `config_path`, the resolved `config`,
   `config_hash`, `dataset_sha256`, `tipguard_version`, `python_version`, `defense`, and
   `main_model`.
@@ -86,6 +98,7 @@ TIPGUARD_OUTPUT_DIR=/tmp/tipguard-runs uv run tipguard evaluate --config experim
 ```bash
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy src
 ```
 
