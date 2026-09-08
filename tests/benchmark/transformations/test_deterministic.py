@@ -6,6 +6,7 @@ import pytest
 
 from tipguard.benchmark.transformations import TRANSFORMATIONS, get_transformation
 from tipguard.benchmark.transformations.base import Encoded, Family
+from tipguard.benchmark.transformations.substitution import decode_without_params
 
 # Mixed case, digits, a space and punctuation. The digits (2, 6) and the
 # punctuation (?) are chosen to avoid colliding with the substitution
@@ -103,33 +104,78 @@ def test_substitution_map_recorded_and_leet_has_no_vowel_letters() -> None:
     assert "e" not in encoded.payload
 
 
-def test_substitution_leet_round_trip_keeps_literal_digits_intact() -> None:
+def test_substitution_chooses_map_with_fewest_collisions() -> None:
+    # Every digit in "4471" and the trailing "5" is itself a leet output
+    # glyph (0/1/3/4/5/7), so "leet" collides 5 times; "symbols" collides
+    # only on the dollar sign. The encoder must pick "symbols" regardless of
+    # seed, since it is the unique minimum.
     transformation = get_transformation(Family.SUBSTITUTION)
     text = "account 4471-ZED costs $5"
 
-    encoded = _encode_with_map(text, "leet")
+    for seed in (0, 1, 2, 5, 17):
+        encoded = transformation.encode(text, random.Random(seed))
+        assert encoded.params["map"] == "symbols"
 
-    assert encoded.params["map"] == "leet"
+
+def test_substitution_round_trip_with_residual_collision_is_still_exact_via_params() -> None:
+    # Even though "symbols" still collides on the literal "$", decode() uses
+    # params["literals"] as generation-time ground truth and stays exact.
+    transformation = get_transformation(Family.SUBSTITUTION)
+    text = "account 4471-ZED costs $5"
+
+    encoded = transformation.encode(text, random.Random(0))
+
+    assert encoded.params["ambiguous"] == "true"
     assert transformation.decode(encoded) == text.lower()
 
 
-def test_substitution_symbols_round_trip_keeps_literal_glyphs_intact() -> None:
+def test_substitution_prefers_leet_when_it_has_fewer_collisions() -> None:
+    # Here "leet" collides only on the trailing digit "5"; "symbols" collides
+    # on "!" and both "$"s. The minimum-collision map can be either one,
+    # proving the selection is genuinely collision-count-driven, not
+    # hardcoded to "symbols".
     transformation = get_transformation(Family.SUBSTITUTION)
-    # Contains a literal "!" and "$", both of which are symbols-map output
-    # glyphs (for "i" and "s" respectively), to prove they survive decode
-    # unchanged rather than being reverse-mapped back into letters.
     text = "wow! that $tuff costs $5"
 
-    encoded = _encode_with_map(text, "symbols")
+    for seed in (0, 1, 2, 5, 17):
+        encoded = transformation.encode(text, random.Random(seed))
+        assert encoded.params["map"] == "leet"
+        assert encoded.params["ambiguous"] == "true"
 
-    assert encoded.params["map"] == "symbols"
-    assert transformation.decode(encoded) == text.lower()
 
-
-def test_substitution_literals_empty_when_no_glyphs_present() -> None:
+def test_substitution_literals_and_ambiguous_empty_when_no_glyphs_present() -> None:
     encoded = _encode_with_map("case sensitive", "leet")
 
     assert encoded.params["literals"] == ""
+    assert encoded.params["ambiguous"] == "false"
+
+
+def test_decode_without_params_matches_decode_for_unambiguous_payload() -> None:
+    transformation = get_transformation(Family.SUBSTITUTION)
+    encoded = _encode_with_map("case sensitive", "leet")
+    assert encoded.params["ambiguous"] == "false"  # sanity: no ground truth needed
+
+    exact = transformation.decode(encoded)
+    blind = decode_without_params(encoded.payload, encoded.params["map"])
+
+    assert blind == exact
+
+
+def test_decode_without_params_diverges_for_ambiguous_payload() -> None:
+    # decode_without_params has no params["literals"] to consult, so it
+    # cannot tell the literal "$" in the source from a substituted "s" and
+    # mis-decodes it — pinning the documented limitation with a real
+    # divergence rather than only describing it.
+    transformation = get_transformation(Family.SUBSTITUTION)
+    text = "account 4471-ZED costs $5"
+    encoded = transformation.encode(text, random.Random(0))
+    assert encoded.params["ambiguous"] == "true"  # sanity
+
+    exact = transformation.decode(encoded)
+    blind = decode_without_params(encoded.payload, encoded.params["map"])
+
+    assert exact == text.lower()
+    assert blind != exact
 
 
 def test_get_transformation_returns_registered_families() -> None:
