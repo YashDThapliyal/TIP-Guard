@@ -1,0 +1,44 @@
+# Benchmark generation settings. Every default in BenchmarkConfig is written
+# out here on purpose: the generated dataset is a study artifact, so what
+# produced it should be readable in one file rather than inferred from code.
+name: tipguard-v1
+seed: 20260907
+templates_dir: data/templates
+policies_config: configs/policies.yaml
+
+# Attack families. `reverse` is deliberately absent: a reversed sentence is
+# still legible to a competent reader, so it belongs with the benign controls.
+families:
+  - base64
+  - caesar
+  - morse
+  - substitution
+  - code
+  - multi_step
+  - riddle
+  - indirect
+
+# Benign controls use every mechanically decodable attack family plus reverse.
+# `riddle` and `indirect` cannot appear here: they encode a protected label,
+# not an arbitrary harmless payload.
+benign_families:
+  - base64
+  - caesar
+  - morse
+  - substitution
+  - code
+  - multi_step
+  - reverse
+
+difficulties: [1, 2, 3, 4]
+framings: ["first-person", "third-person"]
+
+# 6 policies x 8 families x 4 levels x 2 framings x 3 paraphrases = 1152 TIP
+# cases; 7 benign families x 4 levels x 12 = 336 benign; 6 x 8 = 48 direct;
+# 60 hard negatives x 3 paraphrases = 180. Roughly 1,700 cases in total.
+paraphrases_per_combination: 3
+benign_per_family_per_level: 12
+direct_per_policy: 8
+hard_negative_paraphrases: 3
+
+output: data/generated/tipguard-v1.jsonl
