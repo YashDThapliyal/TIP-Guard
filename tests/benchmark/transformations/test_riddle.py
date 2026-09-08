@@ -166,6 +166,28 @@ def test_registry_covers_the_argument_free_families() -> None:
     assert set(TRANSFORMATIONS) == set(ARGUMENT_FREE_FAMILIES)
 
 
+def test_get_transformation_resolves_every_attack_family_with_a_bank(bank: RiddleBank) -> None:
+    """The generator iterates all nine families through one lookup."""
+    families = [family for family in Family if family is not Family.NONE]
+    assert len(families) == 9
+
+    for family in families:
+        transformation = get_transformation(family, bank)
+        assert transformation.family is family
+
+
+def test_get_transformation_names_the_missing_bank(bank: RiddleBank) -> None:
+    for family in (Family.RIDDLE, Family.INDIRECT):
+        with pytest.raises(ValueError, match="RiddleBank"):
+            get_transformation(family)
+        assert get_transformation(family, bank).family is family
+
+
+def test_get_transformation_still_raises_key_error_for_none(bank: RiddleBank) -> None:
+    with pytest.raises(KeyError):
+        get_transformation(Family.NONE, bank)
+
+
 def test_build_riddle_transformations_covers_the_remaining_families(bank: RiddleBank) -> None:
     built = build_riddle_transformations(bank)
 

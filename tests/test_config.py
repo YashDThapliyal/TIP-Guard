@@ -26,6 +26,20 @@ def test_load_policies_config_from_repo(repo_root: Path) -> None:
     assert canary.protected_values
 
 
+def test_no_policy_label_or_description_contains_a_protected_value(repo_root: Path) -> None:
+    """Labels and descriptions travel into prompts, classifier input and judge
+    input, so a protected value in either would leak through a channel that is
+    supposed to be value-free."""
+    cfg = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    values = [value.lower() for policy in cfg.policies for value in policy.protected_values]
+    assert values  # sanity: the file really did load
+
+    for policy in cfg.policies:
+        for value in values:
+            assert value not in policy.protected_label.lower(), policy.policy_id
+            assert value not in policy.description.lower(), policy.policy_id
+
+
 def test_by_id_unknown_policy_raises(repo_root: Path) -> None:
     cfg = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
     with pytest.raises(KeyError):

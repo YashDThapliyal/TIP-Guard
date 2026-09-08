@@ -1,9 +1,10 @@
 """Registry of secret-encoding transformations used to build benchmark cases.
 
 Seven families need no arguments and live in `TRANSFORMATIONS`. The two
-bank-backed families (`riddle`, `indirect`) are built by
-`build_riddle_transformations` instead, so that importing this module never
-reads a data file.
+bank-backed families (`riddle`, `indirect`) are built from a `RiddleBank`,
+so that importing this module never reads a data file. `get_transformation`
+resolves all nine attack families through one lookup: pass the bank and it
+serves the bank-backed pair as well.
 """
 
 from tipguard.benchmark.transformations.base import Encoded, Family, Transformation
@@ -32,12 +33,23 @@ TRANSFORMATIONS: dict[Family, Transformation] = {
 }
 
 
-def get_transformation(family: Family) -> Transformation:
-    """The argument-free transformation for `family`.
+BANK_BACKED_FAMILIES = (Family.RIDDLE, Family.INDIRECT)
 
-    Raises `KeyError` for `riddle`, `indirect` and `none`; the first two
-    come from `build_riddle_transformations`.
+
+def get_transformation(family: Family, bank: RiddleBank | None = None) -> Transformation:
+    """The transformation for `family`, the single lookup a generator needs.
+
+    `riddle` and `indirect` are built from `bank`; requesting either without
+    one raises `ValueError` naming the bank, since loading it here would put
+    a file read behind an import. `KeyError` is raised for `none`.
     """
+    if family in BANK_BACKED_FAMILIES:
+        if bank is None:
+            raise ValueError(
+                f"the {family.value} transformation needs a RiddleBank: "
+                f"call get_transformation({family.value!r}, load_riddle_bank(path))"
+            )
+        return build_riddle_transformations(bank)[family]
     return TRANSFORMATIONS[family]
 
 
@@ -50,6 +62,7 @@ def build_riddle_transformations(bank: RiddleBank) -> dict[Family, Transformatio
 
 
 __all__ = [
+    "BANK_BACKED_FAMILIES",
     "TRANSFORMATIONS",
     "Encoded",
     "Family",

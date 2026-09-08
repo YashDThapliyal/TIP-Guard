@@ -3,7 +3,10 @@
 `encode` writes a short snippet whose *value*, were it run, would be the
 hidden text. `decode` never runs it: it parses the source with `ast` and
 reconstructs the string by recognising exactly three shapes. Anything else
-raises `ValueError("unsupported snippet")`. This decoder is the seed of the
+raises `ValueError("unsupported snippet")`, resource attacks included: the
+source length, the reconstruction length and the replace-chain length are
+all bounded, and a snippet deep enough to exhaust the walk's recursion is
+reported the same way. This decoder is the seed of the
 Phase 4 restricted code analyzer, so it stays deliberately narrow: no
 `exec`, no `eval`, no `compile`, no imports, no attribute access on
 anything but a string, and no call outside `str.join`, `reversed`, `chr`
@@ -23,6 +26,13 @@ MIN_CHUNKS = 3
 MAX_CHUNKS = 6
 PLACEHOLDERS = ("§", "¤")
 MAX_CODE_POINT = 0x10FFFF
+# Hostile snippets are cheap to write and expensive to parse or expand, so
+# both the source and the reconstruction are bounded before any work starts.
+MAX_SOURCE_LENGTH = 20000
+MAX_DECODED_LENGTH = 10000
+# The encoder emits exactly two chained single-character replacements; a
+# longer chain multiplies its input per link, so no other length is accepted.
+REPLACE_LINKS = 2
 TARGET_NAME = "msg"
 PARTS_NAME = "parts"
 ALLOWED_FUNCTIONS = frozenset({"chr", "reversed"})
@@ -43,6 +53,14 @@ def _split(text: str, count: int) -> list[str]:
 
 
 def _join_reverse_source(text: str, rng: random.Random) -> str:
+    """Emit the `parts = [...]` / `"".join(reversed(parts))` pair.
+
+    The chunk count is drawn from `MIN_CHUNKS..MAX_CHUNKS`, then clamped down
+    to one chunk per character so that a text shorter than the draw is never
+    split into empty chunks; a one- or two-character instruction therefore
+    yields one or two chunks rather than three. Real instructions are far
+    longer than `MAX_CHUNKS`, so the clamp only ever fires in tests.
+    """
     count = min(rng.randint(MIN_CHUNKS, MAX_CHUNKS), max(len(text), 1))
     chunks = _split(text, count)
     listed = ", ".join(_literal(chunk) for chunk in reversed(chunks))
@@ -99,20 +117,37 @@ class CodeSnippetTransformation:
 
 
 def decode_snippet(source: str) -> str:
-    """Reconstruct the string a supported snippet would build, without running it."""
+    """Reconstruct the string a supported snippet would build, without running it.
+
+    Every rejection, including one provoked by a resource attack rather than
+    by an unrecognised shape, surfaces as `ValueError(UNSUPPORTED)`.
+    """
     module = _parse(source)
-    _reject_unsafe_nodes(module)
-    for matcher in (_decode_join_reverse, _decode_chr_codes, _decode_replace_chain):
-        result = matcher(module)
-        if result is not None:
-            return result
+    try:
+        _reject_unsafe_nodes(module)
+        for matcher in (_decode_join_reverse, _decode_chr_codes, _decode_replace_chain):
+            result = matcher(module)
+            if result is not None:
+                return _capped(result)
+    except (RecursionError, MemoryError) as exc:
+        # A deeply nested snippet can exhaust the whitelist walk's mutual
+        # recursion; that is an unsupported snippet, not a crash.
+        raise ValueError(UNSUPPORTED) from exc
     raise ValueError(UNSUPPORTED)
 
 
+def _capped(text: str) -> str:
+    if len(text) > MAX_DECODED_LENGTH:
+        raise ValueError(UNSUPPORTED)
+    return text
+
+
 def _parse(source: str) -> ast.Module:
+    if len(source) > MAX_SOURCE_LENGTH:
+        raise ValueError(UNSUPPORTED)
     try:
         return ast.parse(source)
-    except (SyntaxError, ValueError) as exc:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise ValueError(UNSUPPORTED) from exc
 
 
@@ -168,17 +203,21 @@ def _assigned_value(node: ast.stmt, name: str) -> ast.expr | None:
     return node.value
 
 
-def _join_call(node: ast.expr) -> tuple[str, ast.expr] | None:
-    """Match `"<sep>".join(<argument>)`, returning the separator and argument."""
+def _join_call(node: ast.expr) -> ast.expr | None:
+    """Match `"".join(<argument>)`, returning the argument.
+
+    Both generated styles join on the empty string. A non-empty separator is
+    refused: it is a shape the encoder never emits, and it makes
+    reconstruction quadratic in the separator length.
+    """
     if not isinstance(node, ast.Call) or len(node.args) != 1 or node.keywords:
         return None
     func = node.func
     if not isinstance(func, ast.Attribute) or func.attr != "join":
         return None
-    separator = _string_constant(func.value)
-    if separator is None:
+    if _string_constant(func.value) != "":
         return None
-    return separator, node.args[0]
+    return node.args[0]
 
 
 def _is_single_name_call(node: ast.expr, function: str, argument_name: str) -> bool:
@@ -212,13 +251,12 @@ def _decode_join_reverse(module: ast.Module) -> str | None:
     if parts_value is None or message_value is None:
         return None
     chunks = _string_list(parts_value)
-    joined = _join_call(message_value)
-    if chunks is None or joined is None:
+    argument = _join_call(message_value)
+    if chunks is None or argument is None:
         return None
-    separator, argument = joined
     if not _is_single_name_call(argument, "reversed", PARTS_NAME):
         return None
-    return separator.join(reversed(chunks))
+    return "".join(reversed(chunks))
 
 
 def _code_points(node: ast.expr) -> list[int] | None:
@@ -228,6 +266,10 @@ def _code_points(node: ast.expr) -> list[int] | None:
     comprehension = node.generators[0]
     target = comprehension.target
     if comprehension.ifs or comprehension.is_async or not isinstance(target, ast.Name):
+        return None
+    if target.id in ALLOWED_FUNCTIONS:
+        # `chr(chr) for chr in [...]` reads as a match but is a TypeError in
+        # real Python, so reconstructing it would invent a meaning.
         return None
     if not _is_single_name_call(node.elt, "chr", target.id):
         return None
@@ -249,18 +291,17 @@ def _decode_chr_codes(module: ast.Module) -> str | None:
     message_value = _assigned_value(module.body[0], TARGET_NAME)
     if message_value is None:
         return None
-    joined = _join_call(message_value)
-    if joined is None:
+    argument = _join_call(message_value)
+    if argument is None:
         return None
-    separator, argument = joined
     codes = _code_points(argument)
     if codes is None:
         return None
-    return separator.join(chr(code) for code in codes)
+    return "".join(chr(code) for code in codes)
 
 
 def _replace_call(node: ast.Call) -> tuple[ast.expr, tuple[str, str]] | None:
-    """Match `<receiver>.replace("<old>", "<new>")`."""
+    """Match `<receiver>.replace("<c>", "<new>")` for a single-character key."""
     func = node.func
     if not isinstance(func, ast.Attribute) or func.attr != "replace":
         return None
@@ -268,9 +309,17 @@ def _replace_call(node: ast.Call) -> tuple[ast.expr, tuple[str, str]] | None:
         return None
     old = _string_constant(node.args[0])
     new = _string_constant(node.args[1])
-    if old is None or new is None:
+    if old is None or new is None or len(old) != 1:
         return None
     return func.value, (old, new)
+
+
+def _apply_replacement(text: str, old: str, new: str) -> str:
+    """Apply one replacement, refusing one that would expand past the cap."""
+    projected = len(text) + text.count(old) * (len(new) - len(old))
+    if projected > MAX_DECODED_LENGTH:
+        raise ValueError(UNSUPPORTED)
+    return text.replace(old, new)
 
 
 def _decode_replace_chain(module: ast.Module) -> str | None:
@@ -282,13 +331,13 @@ def _decode_replace_chain(module: ast.Module) -> str | None:
     replacements: list[tuple[str, str]] = []
     while isinstance(node, ast.Call):
         matched = _replace_call(node)
-        if matched is None:
+        if matched is None or len(replacements) == REPLACE_LINKS:
             return None
         node, replacement = matched
         replacements.append(replacement)
     text = _string_constant(node)
-    if text is None or not replacements:
+    if text is None or len(replacements) != REPLACE_LINKS:
         return None
     for old, new in reversed(replacements):
-        text = text.replace(old, new)
+        text = _apply_replacement(text, old, new)
     return text
