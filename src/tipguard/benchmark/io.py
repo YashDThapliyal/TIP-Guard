@@ -1,5 +1,7 @@
 """JSONL read/write for benchmark cases."""
 
+import os
+import stat
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -7,6 +9,10 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from tipguard.benchmark.schema import BenchmarkCase
+
+#: The mode a newly created file would get before the umask is applied, i.e.
+#: what `open()` would have used.
+DEFAULT_FILE_MODE = 0o666
 
 
 class DatasetError(ValueError):
@@ -31,6 +37,20 @@ def load_cases(path: Path) -> tuple[BenchmarkCase, ...]:
     return tuple(cases)
 
 
+def _destination_mode(path: Path) -> int:
+    """The mode the written file should end up with.
+
+    An existing destination keeps the permissions it already had; a new one
+    gets what an ordinary `open()` would have given it under the current umask.
+    """
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        umask = os.umask(0)
+        os.umask(umask)
+        return DEFAULT_FILE_MODE & ~umask
+
+
 def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
     """Write the cases as JSONL, replacing `path` only once all of them are on
     disk.
@@ -41,6 +61,7 @@ def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
     rename; a failure leaves the previous file exactly as it was.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    mode = _destination_mode(path)
     handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
         "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
     )
@@ -49,6 +70,10 @@ def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
         with handle:
             for case in cases:
                 handle.write(case.model_dump_json() + "\n")
+        # A temporary file is created 0600, and the rename would make that the
+        # dataset's mode: a previously group- or world-readable dataset would
+        # silently become owner-only on every rewrite.
+        temporary.chmod(mode)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

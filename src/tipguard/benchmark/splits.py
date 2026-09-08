@@ -33,6 +33,10 @@ RATIO_TOLERANCE = 1e-9
 
 FamilyPair = tuple[Family, Family]
 
+#: Every family name the registry knows, for reading metadata that may not be
+#: trustworthy.
+FAMILY_VALUES: frozenset[str] = frozenset(family.value for family in Family)
+
 DEFAULT_HELDOUT_FAMILIES: tuple[Family, ...] = (Family.MORSE, Family.CODE)
 
 #: Read as (inner, outer): the family applied to the payload first, then the
@@ -100,20 +104,49 @@ def _phrasing_index(case: BenchmarkCase) -> int | None:
         return None
 
 
-def _multi_step_pair(case: BenchmarkCase) -> FamilyPair | None:
-    """The (inner, outer) families of a multi-step case, or None."""
-    if case.transformation != Family.MULTI_STEP.value:
-        return None
+def _encoded_params(case: BenchmarkCase) -> dict[str, object]:
+    """The case's decoded `encoded_params`, or an empty mapping.
+
+    Malformed metadata is tolerated rather than fatal: a case that cannot say
+    what it composed simply contributes nothing to the composition rules.
+    """
     try:
         params = json.loads(case.metadata.get("encoded_params", "{}"))
     except json.JSONDecodeError:
+        return {}
+    return params if isinstance(params, dict) else {}
+
+
+def _multi_step_pair(case: BenchmarkCase) -> FamilyPair | None:
+    """The (inner, outer) families of a multi-step case, or None.
+
+    The compositional rule is about an ordered pair, so both halves have to
+    parse for it to mean anything.
+    """
+    if case.transformation != Family.MULTI_STEP.value:
         return None
-    if not isinstance(params, dict):
+    params = _encoded_params(case)
+    inner, outer = params.get("inner"), params.get("outer")
+    if not isinstance(inner, str) or not isinstance(outer, str):
         return None
     try:
-        return (Family(params["inner"]), Family(params["outer"]))
-    except (KeyError, ValueError):
+        return (Family(inner), Family(outer))
+    except ValueError:
         return None
+
+
+def _composed_families(case: BenchmarkCase) -> frozenset[str]:
+    """Every family named in a multi-step case's params that is recognisable.
+
+    Read independently of each other, not as a pair: one unreadable half must
+    not hide the other, or a case composing a withheld family alongside a name
+    the registry does not know would slip into the standard pool.
+    """
+    if case.transformation != Family.MULTI_STEP.value:
+        return frozenset()
+    params = _encoded_params(case)
+    names = (params.get("inner"), params.get("outer"))
+    return frozenset(name for name in names if isinstance(name, str) and name in FAMILY_VALUES)
 
 
 def _case_families(case: BenchmarkCase) -> frozenset[str]:
@@ -124,10 +157,7 @@ def _case_families(case: BenchmarkCase) -> frozenset[str]:
     withholds base64 still shows base64 to the standard splits, wrapped in a
     second transformation.
     """
-    pair = _multi_step_pair(case)
-    if pair is None:
-        return frozenset({case.transformation})
-    return frozenset({case.transformation, pair[0].value, pair[1].value})
+    return frozenset({case.transformation}) | _composed_families(case)
 
 
 def _heldout_phrasings(cases: Sequence[BenchmarkCase], count: int) -> dict[str, frozenset[int]]:

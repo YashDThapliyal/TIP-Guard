@@ -418,3 +418,35 @@ def test_readme_states_the_conditions_without_benign_counterparts(
     readme = (tmp_path / "README.md").read_text(encoding="utf-8")
     assert "No\nfalse-positive rate can be computed within them" in readme
     assert "doubly held out" in readme
+
+
+def test_one_recognisable_held_out_family_is_enough_to_hold_a_composition_out() -> None:
+    """Metadata naming a family the registry does not know must not hide the
+    half of the composition that is held out."""
+    config = SplitConfig(heldout_families=[Family.BASE64])
+    case = make_case(
+        transformation=Family.MULTI_STEP.value,
+        metadata=_metadata(
+            encoded_params=json.dumps({"inner": Family.BASE64.value, "outer": "nonesuch"})
+        ),
+    )
+    assert assign_splits((case,), config)[0].split is Split.HELDOUT_TRANSFORMATION
+
+
+@pytest.mark.parametrize(
+    "encoded_params",
+    ["not json", '["base64"]', "{}", '{"inner": 7, "outer": null}', '{"outer": "reverse"}'],
+)
+def test_unreadable_composition_metadata_contributes_no_family(encoded_params: str) -> None:
+    config = SplitConfig(heldout_families=[Family.BASE64])
+    case = make_case(
+        case_id="tip-multi-step-unreadable",
+        transformation=Family.MULTI_STEP.value,
+        metadata=_metadata(phrasing_index="0", encoded_params=encoded_params),
+    )
+    filler = tuple(
+        make_case(case_id=f"tip-{index:04d}", metadata=_metadata(phrasing_index=str(index)))
+        for index in range(21)
+    )
+    assigned = {item.case_id: item.split for item in assign_splits((case, *filler), config)}
+    assert assigned["tip-multi-step-unreadable"] in STANDARD

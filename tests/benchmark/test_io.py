@@ -1,3 +1,5 @@
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -64,3 +66,22 @@ def test_write_cases_leaves_no_temporary_file_behind_when_the_target_is_a_direct
     with pytest.raises(OSError):
         write_cases(directory, (make_case(),))
     assert list(tmp_path.iterdir()) == [directory]
+
+
+def test_write_cases_keeps_the_destination_file_mode(tmp_path: Path) -> None:
+    """The rename must not hand the dataset the temporary file's 0600."""
+    path = tmp_path / "d.jsonl"
+    write_cases(path, (make_case(),))
+    path.chmod(0o644)
+    write_cases(path, (make_case(), make_case(case_id="tip-base64-l1-0002", prompt="other")))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_write_cases_creates_a_file_with_the_usual_mode(tmp_path: Path) -> None:
+    path = tmp_path / "new.jsonl"
+    write_cases(path, (make_case(),))
+    umask = os.umask(0)
+    os.umask(umask)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode != 0o600
+    assert mode == 0o666 & ~umask
