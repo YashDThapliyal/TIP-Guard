@@ -185,3 +185,54 @@ def test_benchmark_config_rejects_a_zero_count(tmp_path: Path) -> None:
     p.write_text("name: t\nparaphrases_per_combination: 0\n")
     with pytest.raises(ConfigError):
         load_yaml_model(p, BenchmarkConfig)
+
+
+@pytest.mark.parametrize(
+    ("body", "offending"),
+    [
+        ("difficulties: [5]\n", "5"),
+        ("framings: ['foo']\n", "foo"),
+        ("families: ['none']\n", "none"),
+        ("families: ['reverse']\n", "reverse"),
+        ("benign_families: ['riddle']\n", "riddle"),
+        ("benign_families: ['indirect']\n", "indirect"),
+    ],
+)
+def test_benchmark_config_rejects_a_value_outside_the_allowed_set(
+    tmp_path: Path, body: str, offending: str
+) -> None:
+    """These all resolve later to a bare KeyError from the registry or the
+    template bank, so they are refused at load time instead."""
+    p = tmp_path / "benchmark.yaml"
+    p.write_text(f"name: t\n{body}")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, BenchmarkConfig)
+    assert "benchmark.yaml" in str(exc.value)
+    assert offending in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "difficulties: [1, 1]\n",
+        "framings: ['first-person', 'first-person']\n",
+        "families: ['base64', 'base64']\n",
+        "benign_families: ['reverse', 'reverse']\n",
+    ],
+)
+def test_benchmark_config_rejects_duplicates(tmp_path: Path, body: str) -> None:
+    p = tmp_path / "benchmark.yaml"
+    p.write_text(f"name: t\n{body}")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, BenchmarkConfig)
+    assert "more than once" in str(exc.value)
+
+
+@pytest.mark.parametrize("field", ["difficulties", "framings", "families", "benign_families"])
+def test_benchmark_config_rejects_an_empty_list(tmp_path: Path, field: str) -> None:
+    p = tmp_path / "benchmark.yaml"
+    p.write_text(f"name: t\n{field}: []\n")
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(p, BenchmarkConfig)
+    assert field in str(exc.value)
+    assert "must not be empty" in str(exc.value)

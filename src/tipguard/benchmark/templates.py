@@ -18,6 +18,7 @@ from typing import Literal, get_args
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator
 
+from tipguard.benchmark.transformations import BANK_BACKED_FAMILIES, Family
 from tipguard.benchmark.transformations.riddle import RiddleBank, load_riddle_bank
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import FrozenModel, NonEmptyStr, PoliciesConfig
@@ -32,8 +33,17 @@ MIN_PER_CATEGORY = 10
 
 LABEL_PLACEHOLDER = "{label}"
 BODY_PLACEHOLDER = "{body}"
+BENIGN_CATEGORY = "benign"
 
 FramingId = Literal["first-person", "third-person"]
+
+#: Which vocabulary a difficulty template may use. `riddle` and `indirect`
+#: payloads are ordinary prose that was never encoded, so telling their reader
+#: to decode or undo anything is incoherent; every other family really was
+#: transformed. `both` is wording that is true either way.
+TemplateKind = Literal["encoded", "semantic"]
+TemplateSuits = Literal["encoded", "semantic", "both"]
+TEMPLATE_KINDS: tuple[TemplateKind, ...] = get_args(TemplateKind)
 HardNegativeCategory = Literal[
     "academic", "classification", "defensive", "quoted", "suspicion_check"
 ]
@@ -50,6 +60,12 @@ LEVEL_PLACEHOLDERS: Mapping[int, frozenset[str]] = {
     3: frozenset({"payload"}),
     4: frozenset({"payload", "distractor"}),
 }
+
+
+def kind_for(family: Family) -> TemplateKind:
+    """Which difficulty vocabulary suits `family`."""
+    return "semantic" if family in BANK_BACKED_FAMILIES else "encoded"
+
 
 INTENTS_FILE = "intents.yaml"
 PAYLOADS_FILE = "benign_payloads.yaml"
@@ -79,10 +95,17 @@ class IntentTemplate(FrozenModel):
     @field_validator("phrasings")
     @classmethod
     def _every_phrasing_names_the_label(cls, value: list[str]) -> list[str]:
+        """Exactly `{label}` and nothing else.
+
+        A substring test would accept `{{label}}`, which renders as a literal
+        `{label}`, and `{label} {typo}`, which raises `KeyError` at format
+        time. Comparing parsed field names catches both.
+        """
         for phrasing in value:
-            if LABEL_PLACEHOLDER not in phrasing:
+            if placeholders(phrasing) != frozenset({"label"}):
                 raise ValueError(
-                    f"phrasing is missing the {LABEL_PLACEHOLDER} placeholder: {phrasing!r}"
+                    f"phrasing must use exactly the {LABEL_PLACEHOLDER} placeholder "
+                    f"and no other: {phrasing!r}"
                 )
         return value
 
@@ -105,38 +128,96 @@ class Framing(FrozenModel):
     @field_validator("template")
     @classmethod
     def _carries_the_body(cls, value: str) -> str:
-        if BODY_PLACEHOLDER not in value:
-            raise ValueError(f"framing template is missing {BODY_PLACEHOLDER}: {value!r}")
+        if placeholders(value) != frozenset({"body"}):
+            raise ValueError(
+                f"framing template must use exactly the {BODY_PLACEHOLDER} placeholder "
+                f"and no other: {value!r}"
+            )
         return value
 
 
-class DifficultyWrappers(FrozenModel):
-    """The four levels of puzzle framing, plus the prose level 4 hides in."""
+class DifficultyTemplate(FrozenModel):
+    """One wrapper template, and which kind of family its wording fits."""
 
-    level_1: list[NonEmptyStr] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
-    level_2: list[NonEmptyStr] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
-    level_3: list[NonEmptyStr] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
-    level_4: list[NonEmptyStr] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
+    template: NonEmptyStr
+    suits: TemplateSuits
+
+    def fits(self, kind: TemplateKind) -> bool:
+        return self.suits in (kind, "both")
+
+
+class DifficultyWrappers(FrozenModel):
+    """The four levels of puzzle framing, the goal clauses, and the prose
+    level 4 hides its payload in."""
+
+    intent_hints: dict[str, NonEmptyStr] = Field(min_length=1)
+    level_1: list[DifficultyTemplate] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
+    level_2: list[DifficultyTemplate] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
+    level_3: list[DifficultyTemplate] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
+    level_4: list[DifficultyTemplate] = Field(min_length=MIN_TEMPLATES_PER_LEVEL)
     distractors: list[NonEmptyStr] = Field(min_length=MIN_DISTRACTORS)
 
-    def templates_for(self, level: int) -> list[str]:
-        """The templates for `level`; `KeyError` for a level that does not exist."""
+    def templates_for(
+        self, level: int, kind: TemplateKind | None = None
+    ) -> list[DifficultyTemplate]:
+        """The templates for `level`, restricted to those suiting `kind`.
+
+        `KeyError` for a level that does not exist.
+        """
         if level not in LEVEL_PLACEHOLDERS:
             raise KeyError(level)
-        templates: list[str] = getattr(self, f"level_{level}")
-        return templates
+        templates: list[DifficultyTemplate] = getattr(self, f"level_{level}")
+        if kind is None:
+            return templates
+        return [template for template in templates if template.fits(kind)]
+
+    def intent_hint_for(self, category: str) -> str:
+        """The plain-language goal clause for `category`."""
+        try:
+            return self.intent_hints[category]
+        except KeyError as exc:
+            raise ConfigError(f"no intent hint for goal category {category!r}") from exc
+
+    @field_validator("intent_hints")
+    @classmethod
+    def _hints_read_as_mid_sentence_clauses(cls, value: dict[str, str]) -> dict[str, str]:
+        """Level 1 templates place the clause mid-sentence and start a new
+        sentence after it, so it must begin lowercase and end with a stop."""
+        for category, hint in value.items():
+            if not hint[0].islower() or not hint.endswith("."):
+                raise ValueError(
+                    f"intent hint for {category!r} must start lowercase and end "
+                    f"with a full stop: {hint!r}"
+                )
+        return value
 
     @field_validator("level_1", "level_2", "level_3", "level_4")
     @classmethod
-    def _uses_exactly_its_placeholders(cls, value: list[str], info: ValidationInfo) -> list[str]:
+    def _uses_exactly_its_placeholders(
+        cls, value: list[DifficultyTemplate], info: ValidationInfo
+    ) -> list[DifficultyTemplate]:
         level = int(str(info.field_name).removeprefix("level_"))
         required = LEVEL_PLACEHOLDERS[level]
-        for template in value:
-            found = placeholders(template)
+        for entry in value:
+            found = placeholders(entry.template)
             if found != required:
                 raise ValueError(
                     f"template must use exactly {sorted(required)}, "
-                    f"found {sorted(found)}: {template[:60]!r}"
+                    f"found {sorted(found)}: {entry.template[:60]!r}"
+                )
+        return value
+
+    @field_validator("level_1", "level_2", "level_3", "level_4")
+    @classmethod
+    def _offers_enough_of_each_kind(
+        cls, value: list[DifficultyTemplate], info: ValidationInfo
+    ) -> list[DifficultyTemplate]:
+        for kind in TEMPLATE_KINDS:
+            fitting = sum(1 for entry in value if entry.fits(kind))
+            if fitting < MIN_TEMPLATES_PER_LEVEL:
+                raise ValueError(
+                    f"has {fitting} templates suiting {kind} families, "
+                    f"needs at least {MIN_TEMPLATES_PER_LEVEL}"
                 )
         return value
 
@@ -202,6 +283,17 @@ def _build_framings(path: Path, raw: Mapping[str, Sequence[str]]) -> dict[str, l
     return built
 
 
+def _check_intent_hints_cover_policies(
+    path: Path, wrappers: "DifficultyWrappers", policies: PoliciesConfig
+) -> None:
+    """Every goal category a policy can present, plus benign, needs a clause."""
+    needed = {policy.categories[0] for policy in policies.policies if policy.categories}
+    needed.add(BENIGN_CATEGORY)
+    missing = sorted(needed - set(wrappers.intent_hints))
+    if missing:
+        raise ConfigError(f"{path}: no intent_hints entry for {', '.join(missing)}")
+
+
 def _check_hard_negative_categories(path: Path, hard_negatives: Sequence[HardNegative]) -> None:
     for category in HARD_NEGATIVE_CATEGORIES:
         found = sum(1 for hn in hard_negatives if hn.category == category)
@@ -240,12 +332,16 @@ class TemplateBank(FrozenModel):
         hard_negatives = load_yaml_model(hard_negatives_path, _HardNegativesFile).hard_negatives
         _check_hard_negative_categories(hard_negatives_path, hard_negatives)
 
+        difficulty_path = templates_dir / DIFFICULTY_FILE
+        difficulty = load_yaml_model(difficulty_path, DifficultyWrappers)
+        _check_intent_hints_cover_policies(difficulty_path, difficulty, policies)
+
         labels = [policy.protected_label for policy in policies.policies]
         return cls(
             intents=intents,
             benign_payloads=load_yaml_model(templates_dir / PAYLOADS_FILE, _PayloadsFile).payloads,
             framings=_build_framings(framings_path, framings_file.framings),
-            difficulty=load_yaml_model(templates_dir / DIFFICULTY_FILE, DifficultyWrappers),
+            difficulty=difficulty,
             hard_negatives=hard_negatives,
             riddles=load_riddle_bank(templates_dir / RIDDLES_FILE, required_labels=labels),
         )
