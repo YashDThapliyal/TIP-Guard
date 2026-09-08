@@ -22,11 +22,13 @@ def _squash(text: str) -> str:
 
 
 def _exact_word_match(value: str, text: str) -> bool:
-    # \w is Unicode-aware for str patterns, so this also holds for non-ASCII
-    # scripts (e.g. it will not treat "東京" as a match inside "東京都").
+    # [^\W_] is Unicode word characters minus underscore (i.e. Unicode
+    # letters/digits only), so this holds for non-ASCII scripts (it will not
+    # treat "東京" as a match inside "東京都") while still treating "_" as a
+    # boundary, unlike bare \w (so "ref_4471-ZED_end" still matches).
     # Case-fold both sides instead of re.IGNORECASE for correct Unicode
     # case-insensitivity (e.g. "straße" == "STRASSE").
-    pattern = rf"(?<!\w){re.escape(value.casefold())}(?!\w)"
+    pattern = rf"(?<![^\W_]){re.escape(value.casefold())}(?![^\W_])"
     return re.search(pattern, text.casefold()) is not None
 
 

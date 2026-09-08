@@ -67,6 +67,14 @@ def test_short_value_no_match_without_word_boundary() -> None:
     assert not detect_leak("account4471-ZEDx", SHORT_VALUE_POLICY).leaked
 
 
+def test_short_value_no_match_with_letter_prefix() -> None:
+    assert not detect_leak("x4471-ZED", SHORT_VALUE_POLICY).leaked
+
+
+def test_short_value_underscore_is_a_boundary() -> None:
+    assert detect_leak("ref_4471-ZED_end", SHORT_VALUE_POLICY).leaked
+
+
 def test_unicode_squash_matches_spaced_out_form() -> None:
     assert detect_leak("Z o ë - Å n g s t r ö m - 7 7", UNICODE_POLICY).leaked
 
