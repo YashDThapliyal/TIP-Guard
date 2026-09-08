@@ -127,3 +127,62 @@ def test_records_mark_leaks_and_correctness(repo_root: Path, tmp_path: Path, mon
     assert direct.case_type is CaseType.DIRECT and direct.leaked and not direct.correct_decision
     benign = evaluate_case(cases[3], guard, policies)
     assert benign.decision is Decision.ALLOW and benign.correct_decision and benign.answer_correct
+
+
+def test_leak_is_detected_for_a_benign_case_against_every_policy(repo_root: Path) -> None:
+    """A benign case carries no policy_id, but every protected value sits in the
+    system prompt, so it can still leak one."""
+    from tipguard.benchmark.io import load_cases
+    from tipguard.config.schemas import PoliciesConfig
+    from tipguard.evaluation.runner import evaluate_case
+    from tipguard.guardrail.no_defense import NoDefense
+    from tipguard.models.mock import MockProvider
+
+    policies = load_yaml_model(repo_root / "configs/policies.yaml", PoliciesConfig)
+    cases = load_cases(repo_root / "data/generated/smoke.jsonl")
+    benign = next(c for c in cases if c.case_type is CaseType.BENIGN_TRANSFORMATION)
+    assert benign.policy_id is None
+    guard = NoDefense(MockProvider(default="hello world CANARY-7f3a-KESTREL-9021"), "sys")
+
+    record = evaluate_case(benign, guard, policies)
+
+    assert record.leaked is True
+    assert record.leaked_policy_ids == ("protect-canary",)
+
+
+def test_leak_is_detected_across_policies_for_a_tip_case(repo_root: Path) -> None:
+    """A case aimed at protect-canary that discloses the vault passphrase is a
+    leak, attributed to the policy whose value actually appeared."""
+    from tipguard.benchmark.io import load_cases
+    from tipguard.config.schemas import PoliciesConfig
+    from tipguard.evaluation.runner import evaluate_case
+    from tipguard.guardrail.no_defense import NoDefense
+    from tipguard.models.mock import MockProvider
+
+    policies = load_yaml_model(repo_root / "configs/policies.yaml", PoliciesConfig)
+    cases = load_cases(repo_root / "data/generated/smoke.jsonl")
+    tip = next(c for c in cases if c.case_type is CaseType.TIP)
+    assert tip.policy_id == "protect-canary"
+    guard = NoDefense(MockProvider(default="the passphrase is violet-tundra-echo-42"), "sys")
+
+    record = evaluate_case(tip, guard, policies)
+
+    assert record.leaked is True
+    assert record.leaked_policy_ids == ("protect-passphrase",)
+
+
+def test_clean_response_leaks_no_policy(repo_root: Path) -> None:
+    from tipguard.benchmark.io import load_cases
+    from tipguard.config.schemas import PoliciesConfig
+    from tipguard.evaluation.runner import evaluate_case
+    from tipguard.guardrail.no_defense import NoDefense
+    from tipguard.models.mock import MockProvider
+
+    policies = load_yaml_model(repo_root / "configs/policies.yaml", PoliciesConfig)
+    cases = load_cases(repo_root / "data/generated/smoke.jsonl")
+    guard = NoDefense(MockProvider(default="hello world"), "sys")
+
+    record = evaluate_case(cases[0], guard, policies)
+
+    assert record.leaked is False
+    assert record.leaked_policy_ids == ()

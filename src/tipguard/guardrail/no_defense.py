@@ -25,6 +25,7 @@ class NoDefense:
             reasons=(),
             components=(trace,),
             model_calls=1,
+            cached_model_calls=int(response.cached),
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
             cost_usd=response.cost_usd,

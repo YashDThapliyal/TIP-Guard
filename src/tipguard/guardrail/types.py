@@ -39,6 +39,8 @@ class GuardrailResult(BaseModel):
     reasons: tuple[str, ...]
     components: tuple[ComponentTrace, ...]
     model_calls: int
+    # How many of `model_calls` were served from the response cache.
+    cached_model_calls: int
     input_tokens: int
     output_tokens: int
     cost_usd: float

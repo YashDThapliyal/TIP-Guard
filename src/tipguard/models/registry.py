@@ -2,6 +2,7 @@
 
 import json
 
+from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import ModelsConfig, ModelSpec
 from tipguard.models.anthropic_provider import AnthropicProvider
 from tipguard.models.cache import CachedProvider, ResponseCache
@@ -42,13 +43,20 @@ class ProviderRegistry:
         self._providers: dict[str, ModelProvider] = {}
 
     def spec(self, alias: str) -> ModelSpec:
-        return self._config.models[alias]
+        try:
+            return self._config.models[alias]
+        except KeyError as exc:
+            raise ConfigError(
+                f"unknown model alias {alias!r}; known aliases: {sorted(self._config.models)}"
+            ) from exc
 
     def get(self, alias: str) -> ModelProvider:
         if alias not in self._providers:
             spec = self.spec(alias)
             provider = build_provider(spec)
             if self._cache is not None:
-                provider = CachedProvider(provider, self._cache, namespace=_cache_namespace(spec))
+                provider = CachedProvider(
+                    provider, self._cache, namespace=_cache_namespace(spec), spec=spec
+                )
             self._providers[alias] = provider
         return self._providers[alias]
