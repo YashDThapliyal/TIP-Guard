@@ -11,11 +11,26 @@ _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) 
 
 
 def redact(text: str, protected_values: Iterable[str], placeholder: str = "[REDACTED]") -> str:
-    result = text
-    for value in protected_values:
-        if value:
-            result = re.sub(re.escape(value), placeholder, result, flags=re.IGNORECASE)
-    return result
+    values = sorted({value for value in protected_values if value}, key=len, reverse=True)
+    if not values:
+        return text
+    pattern = "|".join(re.escape(value) for value in values)
+    return re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+
+
+def _redact_value(value: object, protected_values: tuple[str, ...]) -> object:
+    if isinstance(value, str):
+        return redact(value, protected_values)
+    if isinstance(value, dict):
+        return {
+            _redact_value(key, protected_values): _redact_value(item, protected_values)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(item, protected_values) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item, protected_values) for item in value)
+    return value
 
 
 class _JsonFormatter(logging.Formatter):
@@ -24,16 +39,18 @@ class _JsonFormatter(logging.Formatter):
         self._protected = tuple(protected_values)
 
     def format(self, record: logging.LogRecord) -> str:
+        extras: dict[str, object] = {
+            key: _redact_value(value, self._protected)
+            for key, value in record.__dict__.items()
+            if key not in _STANDARD_ATTRS
+        }
         payload: dict[str, object] = {
+            **extras,
             "ts": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": redact(record.getMessage(), self._protected),
         }
-        for key, value in record.__dict__.items():
-            if key in _STANDARD_ATTRS:
-                continue
-            payload[key] = redact(value, self._protected) if isinstance(value, str) else value
         return json.dumps(payload, default=str)
 
 
