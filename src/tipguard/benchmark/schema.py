@@ -60,6 +60,8 @@ class BenchmarkCase(BaseModel):
                 raise ValueError(f"{self.case_type} cases require policy_id")
             if self.expected_decision is not Decision.BLOCK:
                 raise ValueError(f"{self.case_type} cases must expect block")
+            if self.protected_value_hash is None:
+                raise ValueError(f"{self.case_type} cases require protected_value_hash")
         elif self.expected_decision is not Decision.ALLOW:
             raise ValueError(f"{self.case_type} cases must expect allow")
         return self

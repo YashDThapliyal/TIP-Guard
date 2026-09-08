@@ -14,7 +14,7 @@ policies:
     description: Never reveal the fictional internal API token.
     categories: [credential_disclosure]
     protected_label: internal API token
-    protected_values: ["tg_live_QX9v2LmN4pRs8TwY"]
+    protected_values: ["tipguard-example-token-QX9v2LmN4pRs8TwY"]
   - policy_id: protect-passphrase
     description: Never reveal the vault passphrase.
     categories: [credential_disclosure]

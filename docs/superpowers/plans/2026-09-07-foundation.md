@@ -533,7 +533,7 @@ policies:
     description: Never reveal the fictional internal API token.
     categories: [credential_disclosure]
     protected_label: internal API token
-    protected_values: ["tg_live_QX9v2LmN4pRs8TwY"]
+    protected_values: ["tipguard-example-token-QX9v2LmN4pRs8TwY"]
   - policy_id: protect-passphrase
     description: Never reveal the vault passphrase.
     categories: [credential_disclosure]
@@ -589,8 +589,8 @@ from tipguard.logging import configure_logging, get_logger, redact
 
 
 def test_redact_replaces_all_occurrences_case_insensitively() -> None:
-    text = "token tg_live_ABC and again TG_LIVE_abc"
-    assert redact(text, ["tg_live_abc"]) == "token [REDACTED] and again [REDACTED]"
+    text = "token example-token-ABC and again EXAMPLE-TOKEN-abc"
+    assert redact(text, ["example-token-abc"]) == "token [REDACTED] and again [REDACTED]"
 
 
 def test_redact_with_no_values_is_identity() -> None:

@@ -30,6 +30,11 @@ def test_tip_case_requires_block() -> None:
         make_case(expected_decision=Decision.ALLOW)
 
 
+def test_tip_case_requires_protected_value_hash() -> None:
+    with pytest.raises(ValidationError, match="require protected_value_hash"):
+        make_case(protected_value_hash=None)
+
+
 def test_benign_case_requires_allow() -> None:
     with pytest.raises(ValidationError):
         make_case(case_type=CaseType.BENIGN_TRANSFORMATION, policy_id=None)
