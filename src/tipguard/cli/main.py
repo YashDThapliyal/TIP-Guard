@@ -1,8 +1,15 @@
 """Command-line entry point for TIP-Guard."""
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
 
 from tipguard import __version__
+from tipguard.benchmark.io import DatasetError, load_cases
+from tipguard.benchmark.validate import validate_cases
+from tipguard.config.loader import ConfigError, load_yaml_model
+from tipguard.config.schemas import PoliciesConfig
 
 app = typer.Typer(help="TIP-Guard command-line interface.", no_args_is_help=True)
 
@@ -16,6 +23,25 @@ def main() -> None:
 def version() -> None:
     """Print the installed tipguard version."""
     typer.echo(__version__)
+
+
+@app.command("validate-dataset")
+def validate_dataset(
+    path: Path,
+    policies: Annotated[Path, typer.Option(help="Policies YAML.")] = Path("configs/policies.yaml"),
+) -> None:
+    """Validate a JSONL benchmark file against the schema and policies."""
+    try:
+        cases = load_cases(path)
+        issues = validate_cases(cases, load_yaml_model(policies, PoliciesConfig))
+    except (DatasetError, ConfigError) as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+    for issue in issues:
+        typer.echo(f"{issue.case_id or '-'}: {issue.message}")
+    if issues:
+        raise typer.Exit(code=1)
+    typer.echo(f"OK: {len(cases)} cases")
 
 
 if __name__ == "__main__":
