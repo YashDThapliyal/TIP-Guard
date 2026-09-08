@@ -231,3 +231,92 @@ def test_generate_reports_an_unwritable_output_path(tmp_path, repo_root) -> None
     assert result.exit_code == 1
     assert "already-a-directory" in result.stdout
     assert "cannot write" in result.stdout
+
+
+def _split_dataset(tmp_path, repo_root):  # type: ignore[no-untyped-def]
+    """A private copy of the shipped dataset, safe to rewrite in place."""
+    import shutil
+
+    destination = tmp_path / "dataset.jsonl"
+    shutil.copyfile(repo_root / "data/generated/tipguard-v1.jsonl", destination)
+    return destination
+
+
+def test_split_writes_manifests_and_rewrites_the_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    import json
+
+    from tipguard.benchmark.io import load_cases
+
+    dataset = _split_dataset(tmp_path, repo_root)
+    out_dir = tmp_path / "splits"
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(dataset),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(out_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "heldout_transformation" in result.stdout
+    cases = load_cases(dataset)
+    assert {case.split.value for case in cases} > {"test"}
+    manifest = json.loads((out_dir / "heldout_transformation.json").read_text(encoding="utf-8"))
+    assert manifest["count"] == len(manifest["case_ids"]) > 0
+    assert (out_dir / "README.md").is_file()
+
+
+def test_split_reports_a_bad_config(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    bad = tmp_path / "bad-splits.yaml"
+    bad.write_text("train: 0.5\ndev: 0.1\ntest: 0.3\n")
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(repo_root / "data/generated/smoke.jsonl"),
+            "--config",
+            str(bad),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "bad-splits.yaml" in result.stdout
+
+
+def test_split_reports_a_missing_dataset(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(tmp_path / "missing.jsonl"),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "missing.jsonl" in result.stdout
+
+
+def test_split_reports_an_unwritable_out_dir(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    blocked = tmp_path / "already-a-file"
+    blocked.write_text("")
+    result = runner.invoke(
+        app,
+        [
+            "split",
+            "--dataset",
+            str(_split_dataset(tmp_path, repo_root)),
+            "--config",
+            str(repo_root / "configs/splits.yaml"),
+            "--out-dir",
+            str(blocked),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "already-a-file" in result.stdout
+    assert "cannot write" in result.stdout

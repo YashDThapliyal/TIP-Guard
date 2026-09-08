@@ -14,6 +14,7 @@ from tipguard.benchmark.dedupe import dedupe_cases
 from tipguard.benchmark.generator import generate_cases
 from tipguard.benchmark.io import DatasetError, load_cases, write_cases
 from tipguard.benchmark.schema import BenchmarkCase
+from tipguard.benchmark.splits import SplitConfig, assign_splits, write_manifests
 from tipguard.benchmark.templates import TemplateBank
 from tipguard.benchmark.validate import ValidationIssue, validate_cases
 from tipguard.config.loader import ConfigError, load_yaml_model
@@ -23,6 +24,11 @@ from tipguard.logging import redact
 from tipguard.models.types import ProviderError
 
 app = typer.Typer(help="TIP-Guard command-line interface.", no_args_is_help=True)
+
+DEFAULT_POLICIES = Path("configs/policies.yaml")
+DEFAULT_DATASET = Path("data/generated/tipguard-v1.jsonl")
+DEFAULT_SPLITS_CONFIG = Path("configs/splits.yaml")
+DEFAULT_SPLITS_DIR = Path("data/splits")
 
 
 def _protected_values(policies_path: Path) -> tuple[str, ...]:
@@ -79,7 +85,7 @@ def version() -> None:
 @app.command("validate-dataset")
 def validate_dataset(
     path: Path,
-    policies: Annotated[Path, typer.Option(help="Policies YAML.")] = Path("configs/policies.yaml"),
+    policies: Annotated[Path, typer.Option(help="Policies YAML.")] = DEFAULT_POLICIES,
 ) -> None:
     """Validate a JSONL benchmark file against the schema and policies."""
     protected = _protected_values(policies)
@@ -190,6 +196,43 @@ def generate(
         f"({built.removed} removed as duplicates)"
     )
     typer.echo(_type_counts(built.cases))
+
+
+def _write_manifests(cases: Sequence[BenchmarkCase], out_dir: Path) -> dict[str, int]:
+    """Write the manifests, turning an I/O failure into a dataset error.
+
+    An `--out-dir` naming an existing file or a read-only location must reach
+    the user as the same one-line, redacted message every other failure does.
+    """
+    try:
+        return write_manifests(cases, out_dir)
+    except OSError as exc:
+        raise DatasetError(f"{out_dir}: cannot write manifests: {exc}") from exc
+
+
+@app.command()
+def split(
+    dataset: Annotated[
+        Path, typer.Option("--dataset", help="Benchmark JSONL to rewrite in place.")
+    ] = DEFAULT_DATASET,
+    config: Annotated[Path, typer.Option("--config", help="Split YAML.")] = DEFAULT_SPLITS_CONFIG,
+    out_dir: Annotated[
+        Path, typer.Option("--out-dir", help="Where the manifests are written.")
+    ] = DEFAULT_SPLITS_DIR,
+) -> None:
+    """Assign split conditions, rewrite the dataset in place, and write manifests."""
+    protected = _protected_values(DEFAULT_POLICIES)
+    try:
+        split_config = load_yaml_model(config, SplitConfig)
+        cases = assign_splits(load_cases(dataset), split_config)
+        _write_dataset(dataset, cases)
+        counts = _write_manifests(cases, out_dir)
+    except (ConfigError, DatasetError) as exc:
+        _echo(str(exc), protected)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"wrote {len(cases)} cases to {dataset} and manifests to {out_dir}")
+    for name, count in counts.items():
+        typer.echo(f"{name} {count}")
 
 
 if __name__ == "__main__":
