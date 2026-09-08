@@ -82,15 +82,23 @@ def test_config_hash_distinguishes_keys_with_same_string_form() -> None:
 
 
 def test_config_hash_uses_enum_value_not_repr() -> None:
-    expected_canonical = json.dumps([["color", "red"]], separators=(",", ":"))
+    expected_canonical = json.dumps(["__map__", [["color", "red"]]], separators=(",", ":"))
     expected = hashlib.sha256(expected_canonical.encode("utf-8")).hexdigest()
     assert config_hash(CfgWithEnum(color=PlainColor.RED)) == expected
 
 
 def test_config_hash_is_stable_for_path_fields() -> None:
-    expected_canonical = json.dumps([["path", "configs/a.yaml"]], separators=(",", ":"))
+    expected_canonical = json.dumps(
+        ["__map__", [["path", "configs/a.yaml"]]], separators=(",", ":")
+    )
     expected = hashlib.sha256(expected_canonical.encode("utf-8")).hexdigest()
     assert config_hash(CfgWithPath(path=Path("configs/a.yaml"))) == expected
+
+
+def test_config_hash_distinguishes_mapping_from_equivalent_pair_list() -> None:
+    assert config_hash(CfgWithParams(params={"a": 1})) != config_hash(
+        CfgWithParams(params={"x": [["a", 1]]})
+    )
 
 
 def test_make_run_id_format() -> None:

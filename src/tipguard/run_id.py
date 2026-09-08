@@ -21,7 +21,7 @@ def _canonical(obj: object) -> object:
         return str(obj)
     if isinstance(obj, dict):
         pairs = [[_canonical(key), _canonical(value)] for key, value in obj.items()]
-        return sorted(pairs, key=_sort_key)
+        return ["__map__", sorted(pairs, key=_sort_key)]
     if isinstance(obj, set | frozenset):
         return sorted((_canonical(item) for item in obj), key=_sort_key)
     if isinstance(obj, list | tuple):
