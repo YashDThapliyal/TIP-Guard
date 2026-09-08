@@ -64,3 +64,7 @@ class ModelProvider(Protocol):
     model: str
 
     def complete(self, request: ModelRequest) -> ModelResponse: ...
+
+
+class ProviderError(RuntimeError):
+    """Raised when an upstream model provider call fails."""
