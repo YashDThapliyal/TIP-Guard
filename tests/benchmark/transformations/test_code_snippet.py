@@ -302,12 +302,29 @@ def test_encode_refuses_a_text_past_the_decode_cap() -> None:
         transformation.encode(text, random.Random(0))
 
 
-def test_encode_refuses_a_text_whose_compact_source_is_too_long() -> None:
-    # Every character escapes to six source characters, so even the compact
-    # style runs past the source cap while the text itself is under the
-    # decode cap.
+@pytest.mark.parametrize("seed", range(8))
+def test_encode_uses_whichever_style_fits_not_a_fixed_one(seed: int) -> None:
+    # Every character here escapes to six source characters, so join_reverse
+    # runs past the cap while chr_codes, at three characters each, fits
+    # easily. Which style the draw picked must not decide whether the text is
+    # encodable at all.
     transformation = CodeSnippetTransformation()
     text = "\x01" * 5000
 
-    with pytest.raises(ValueError, match="5000 characters"):
-        transformation.encode(text, random.Random(0))
+    encoded = transformation.encode(text, random.Random(seed))
+
+    assert len(encoded.payload) <= MAX_SOURCE_LENGTH
+    assert transformation.decode(encoded) == text
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_encode_refuses_a_text_that_fits_no_style(seed: int) -> None:
+    # Control characters are cheap for chr_codes and expensive for
+    # join_reverse; astral characters are the other way round. A text made of
+    # both defeats every style, and the message must say so with the smallest
+    # size any style actually achieved.
+    transformation = CodeSnippetTransformation()
+    text = "\x01" * 3000 + "\U0010ffff" * 7000
+
+    with pytest.raises(ValueError, match=r"10000 characters.*20000-character.*smallest"):
+        transformation.encode(text, random.Random(seed))

@@ -7,8 +7,8 @@ raises `ValueError("unsupported snippet")`, resource attacks included: the
 source length, the reconstruction length and the replace-chain length are
 all bounded, and a snippet deep enough to exhaust the walk's recursion is
 reported the same way. `encode` respects the same bounds: it falls back to
-the most compact style rather than emitting source its own decoder would
-refuse, and raises if even that will not fit. This decoder is the seed of the
+whichever style fits rather than emitting source its own decoder would
+refuse, and raises only if no style fits. This decoder is the seed of the
 Phase 4 restricted code analyzer, so it stays deliberately narrow: no
 `exec`, no `eval`, no `compile`, no imports, no attribute access on
 anything but a string, and no call outside `str.join`, `reversed`, `chr`
@@ -111,7 +111,33 @@ def _style_source(style: str, text: str, rng: random.Random) -> tuple[str, str]:
     return "chr_codes", _chr_codes_source(text)
 
 
-def _require_decodable(text: str, payload: str) -> None:
+def _first_fitting_source(
+    style: str, payload: str, text: str, rng: random.Random
+) -> tuple[str, str, int]:
+    """The first style whose source fits the cap, and the smallest size seen.
+
+    No style is uniformly the most compact: `chr_codes` costs a few
+    characters per code point, while `join_reverse` costs one per character
+    plus its escaping, so control characters favour the first and astral
+    characters the second. The drawn style is therefore tried first and the
+    rest in name order, which keeps the fallback deterministic without
+    letting the draw decide whether a text is encodable at all. The drawn
+    style is never regenerated, so the common path takes no extra draw.
+    """
+    smallest = len(payload)
+    if smallest <= MAX_SOURCE_LENGTH:
+        return style, payload, smallest
+    for candidate in sorted(STYLES):
+        if candidate == style:
+            continue
+        used, source = _style_source(candidate, text, rng)
+        smallest = min(smallest, len(source))
+        if len(source) <= MAX_SOURCE_LENGTH:
+            return used, source, len(source)
+    return style, payload, smallest
+
+
+def _require_decodable(text: str, payload: str, smallest: int) -> None:
     """Refuse to emit a payload this module's own decoder would reject.
 
     Failing here is loud and happens at construction time; the alternative
@@ -124,9 +150,9 @@ def _require_decodable(text: str, payload: str) -> None:
         )
     if len(payload) > MAX_SOURCE_LENGTH:
         raise ValueError(
-            f"cannot encode {len(text)} characters as a Python snippet: even the "
-            f"compact style needs {len(payload)} characters of source, over the "
-            f"{MAX_SOURCE_LENGTH}-character limit"
+            f"cannot encode {len(text)} characters as a Python snippet: no style fits "
+            f"the {MAX_SOURCE_LENGTH}-character source limit, the smallest being "
+            f"{smallest} characters"
         )
 
 
@@ -135,14 +161,12 @@ class CodeSnippetTransformation:
     deterministic = True
 
     def encode(self, text: str, rng: random.Random) -> Encoded:
+        # A long text can produce source past the cap the decoder enforces, so
+        # the drawn style may have to give way to one that fits; everything
+        # encode returns must survive its own decode.
         style, payload = _style_source(str(rng.choice(sorted(STYLES))), text, rng)
-        if len(payload) > MAX_SOURCE_LENGTH:
-            # chr_codes expands roughly fourfold and replace_chain grows under
-            # escaping, so a long text can produce source past the decoder's
-            # cap. join_reverse is the most compact style; fall back to it so
-            # that everything encode returns still decodes.
-            style, payload = _style_source("join_reverse", text, rng)
-        _require_decodable(text, payload)
+        style, payload, smallest = _first_fitting_source(style, payload, text, rng)
+        _require_decodable(text, payload, smallest)
         return Encoded(payload=payload, family=self.family, params={"style": style}, hint=HINT)
 
     def decode(self, encoded: Encoded) -> str:
