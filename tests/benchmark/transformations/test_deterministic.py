@@ -191,9 +191,12 @@ def test_get_transformation_returns_registered_families() -> None:
         assert TRANSFORMATIONS[family] is transformation
 
 
-def test_get_transformation_raises_key_error_for_unimplemented_family() -> None:
-    with pytest.raises(KeyError):
-        get_transformation(Family.CODE)
+def test_get_transformation_raises_key_error_for_bank_backed_families() -> None:
+    # The riddle families need a RiddleBank, so they live behind
+    # build_riddle_transformations rather than the argument-free registry.
+    for family in (Family.RIDDLE, Family.INDIRECT, Family.NONE):
+        with pytest.raises(KeyError):
+            get_transformation(family)
 
 
 # --- Fixed known-output tests -----------------------------------------------
