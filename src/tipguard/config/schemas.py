@@ -61,4 +61,4 @@ class ExperimentConfig(FrozenModel):
     defense: DefenseConfig
     output_dir: Path = Path("reports/runs")
     cache_dir: Path | None = Path(".tipguard-cache")
-    limit: int | None = None
+    limit: int | None = Field(default=None, ge=1)

@@ -44,6 +44,16 @@ def test_experiment_config_defaults(tmp_path: Path) -> None:
     assert cfg.output_dir == Path("reports/runs")
 
 
+def test_experiment_config_rejects_non_positive_limit(tmp_path: Path) -> None:
+    p = tmp_path / "bad_limit.yaml"
+    p.write_text(
+        "name: t\ndataset: data/generated/smoke.jsonl\nmain_model: mock-main\n"
+        "defense:\n  name: no_defense\nlimit: -1\n"
+    )
+    with pytest.raises(ConfigError):
+        load_yaml_model(p, ExperimentConfig)
+
+
 def test_invalid_yaml_names_file_and_field(tmp_path: Path) -> None:
     p = tmp_path / "bad.yaml"
     p.write_text("name: t\ndataset: x.jsonl\n")  # missing main_model and defense

@@ -50,7 +50,9 @@ def validate_dataset(
 def evaluate(
     config: Annotated[Path, typer.Option("--config", help="Experiment YAML.")],
     run_id: Annotated[str | None, typer.Option(help="Override the generated run id.")] = None,
-    limit: Annotated[int | None, typer.Option(help="Evaluate only the first N cases.")] = None,
+    limit: Annotated[
+        int | None, typer.Option(help="Evaluate only the first N cases.", min=1)
+    ] = None,
 ) -> None:
     """Run an experiment configuration and write results under the output directory."""
     try:

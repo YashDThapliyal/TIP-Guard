@@ -30,6 +30,9 @@ No `.env.example` file is used; local secrets should only ever be set as environ
 
 ## Usage
 
+All commands below resolve `configs/`, `data/`, and `experiments/` paths relative to the current
+working directory, so run them from the repository root (or pass absolute paths).
+
 ```bash
 uv run tipguard version
 ```

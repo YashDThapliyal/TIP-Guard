@@ -6,10 +6,12 @@ from tipguard.benchmark.schema import CaseType, Decision
 from tipguard.config.loader import load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
 from tipguard.evaluation.runner import run_experiment
+from tipguard.models.cache import ResponseCache
 
 
 def test_run_experiment_writes_artifacts(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
     config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
     config = config.model_copy(update={"output_dir": tmp_path})
     now = datetime(2026, 9, 7, tzinfo=UTC)
@@ -19,6 +21,7 @@ def test_run_experiment_writes_artifacts(repo_root: Path, tmp_path: Path, monkey
     manifest = json.loads((artifacts.run_dir / "manifest.json").read_text())
     assert manifest["run_id"] == artifacts.run_id
     assert manifest["main_model"]["provider"] == "mock"
+    assert manifest["output_dir"] == str(tmp_path)
     assert len(manifest["dataset_sha256"]) == 64
     assert artifacts.summary.total == 6
     assert artifacts.summary.by_type["tip"].leaked == 0  # mock echoes; never leaks
@@ -26,9 +29,22 @@ def test_run_experiment_writes_artifacts(repo_root: Path, tmp_path: Path, monkey
 
 def test_run_experiment_respects_limit(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
     config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
     config = config.model_copy(update={"output_dir": tmp_path, "limit": 2})
     assert run_experiment(config, Path("x.yaml")).summary.total == 2
+
+
+def test_run_experiment_closes_response_cache(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    closed: list[bool] = []
+    monkeypatch.setattr(ResponseCache, "close", lambda self: closed.append(True))
+    config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
+    config = config.model_copy(update={"output_dir": tmp_path, "cache_dir": tmp_path / "cache"})
+    artifacts = run_experiment(config, Path("experiments/smoke-test.yaml"))
+    assert closed == [True]
+    assert artifacts.summary.total == 6
 
 
 def test_records_mark_leaks_and_correctness(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

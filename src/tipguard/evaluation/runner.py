@@ -4,16 +4,19 @@ import hashlib
 import json
 import os
 import platform
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from tipguard import __version__
-from tipguard.benchmark.io import load_cases
-from tipguard.config.loader import load_yaml_model
+from tipguard.benchmark.io import DatasetError, load_cases
+from tipguard.benchmark.schema import BenchmarkCase
+from tipguard.benchmark.validate import validate_cases
+from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig, ModelsConfig, PoliciesConfig
-from tipguard.evaluation.case import evaluate_case
+from tipguard.evaluation.case import _answer_correct, evaluate_case
 from tipguard.evaluation.summary import CaseRecord, RunSummary, summarize
 from tipguard.guardrail.factory import build_guardrail
 from tipguard.logging import configure_logging, get_logger
@@ -22,9 +25,11 @@ from tipguard.models.registry import ProviderRegistry
 from tipguard.run_id import config_hash, make_run_id
 from tipguard.seeding import seed_everything
 
-__all__ = ["OUTPUT_DIR_ENV", "RunArtifacts", "evaluate_case", "run_experiment"]
+__all__ = ["OUTPUT_DIR_ENV", "RunArtifacts", "_answer_correct", "evaluate_case", "run_experiment"]
 
 OUTPUT_DIR_ENV = "TIPGUARD_OUTPUT_DIR"
+_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_MAX_DATASET_ISSUES = 5
 log = get_logger("runner")
 
 
@@ -38,6 +43,44 @@ class RunArtifacts:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _ensure_model_alias(config: ExperimentConfig, models: ModelsConfig) -> None:
+    if config.main_model not in models.models:
+        raise ConfigError(f"{config.models_config}: unknown model alias {config.main_model!r}")
+
+
+def _ensure_dataset_valid(
+    cases: Sequence[BenchmarkCase], policies: PoliciesConfig, dataset: Path
+) -> None:
+    issues = validate_cases(cases, policies)
+    if issues:
+        detail = "; ".join(
+            f"{issue.case_id or '-'}: {issue.message}" for issue in issues[:_MAX_DATASET_ISSUES]
+        )
+        raise DatasetError(f"{dataset}: {detail}")
+
+
+def _ensure_run_id_safe(run_id: str) -> None:
+    if not _RUN_ID_PATTERN.match(run_id):
+        raise ConfigError(f"invalid run id {run_id!r}")
+
+
+def _ensure_run_dir_free(run_dir: Path) -> None:
+    if run_dir.exists() and any(run_dir.iterdir()):
+        raise ConfigError(f"run directory already exists: {run_dir}; choose another --run-id")
+
+
+def _log_records(records: Sequence[CaseRecord]) -> None:
+    for record in records:
+        log.info(
+            "case_evaluated",
+            extra={
+                "case_id": record.case_id,
+                "decision": record.decision.value,
+                "leaked": record.leaked,
+            },
+        )
 
 
 def _write_artifacts(
@@ -59,6 +102,7 @@ def _build_manifest(
     resolved_run_id: str,
     now: datetime,
     registry: ProviderRegistry,
+    output_dir: Path,
 ) -> dict[str, object]:
     spec = registry.spec(config.main_model)
     return {
@@ -71,6 +115,7 @@ def _build_manifest(
         "tipguard_version": __version__,
         "python_version": platform.python_version(),
         "defense": config.defense.name,
+        "output_dir": str(output_dir),
         "main_model": {"alias": config.main_model, "provider": spec.provider, "model": spec.model},
     }
 
@@ -85,26 +130,27 @@ def run_experiment(
     seed_everything(config.seed)
     policies = load_yaml_model(config.policies_config, PoliciesConfig)
     models = load_yaml_model(config.models_config, ModelsConfig)
+    _ensure_model_alias(config, models)
     configure_logging(protected_values=[v for p in policies.policies for v in p.protected_values])
-    cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
-    registry = ProviderRegistry(models, cache=cache)
-    main_model = registry.get(config.main_model)
-    guardrail = build_guardrail(config.defense, main_model, policies)
-    cases = load_cases(config.dataset)[: config.limit]
-    records = tuple(evaluate_case(case, guardrail, policies) for case in cases)
-    for record in records:
-        log.info(
-            "case_evaluated",
-            extra={
-                "case_id": record.case_id,
-                "decision": record.decision.value,
-                "leaked": record.leaked,
-            },
-        )
-    summary = summarize(records)
+    cases = load_cases(config.dataset)
+    _ensure_dataset_valid(cases, policies, config.dataset)
+    cases = cases[: config.limit]
     resolved_run_id = run_id or make_run_id(config.name, config, now=now)
+    _ensure_run_id_safe(resolved_run_id)
     output_dir = Path(os.environ.get(OUTPUT_DIR_ENV) or config.output_dir)
     run_dir = output_dir / resolved_run_id
-    manifest = _build_manifest(config, config_path, resolved_run_id, now, registry)
+    _ensure_run_dir_free(run_dir)
+    cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
+    try:
+        registry = ProviderRegistry(models, cache=cache)
+        main_model = registry.get(config.main_model)
+        guardrail = build_guardrail(config.defense, main_model, policies)
+        records = tuple(evaluate_case(case, guardrail, policies) for case in cases)
+        _log_records(records)
+        summary = summarize(records)
+        manifest = _build_manifest(config, config_path, resolved_run_id, now, registry, output_dir)
+    finally:
+        if cache is not None:
+            cache.close()
     _write_artifacts(run_dir, records, summary, manifest)
     return RunArtifacts(resolved_run_id, run_dir, summary, records)
