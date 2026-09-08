@@ -120,3 +120,27 @@ def test_write_cases_never_takes_over_an_existing_temporary_file(
         write_cases(path, (make_case(case_id="tip-base64-l1-0002", prompt="other"),))
     assert path.read_text(encoding="utf-8") == before
     assert squatter.read_text(encoding="utf-8") == "someone else's"
+
+
+def test_write_cases_narrows_the_temporary_before_writing_any_data(tmp_path: Path) -> None:
+    """A restrictively permissioned dataset must not be readable in draft: the
+    temporary is chmod-ed to the destination's mode before the first line."""
+    path = tmp_path / "d.jsonl"
+    write_cases(path, (make_case(),))
+    path.chmod(0o600)
+    observed: list[int] = []
+
+    class _RecordingCase:
+        """Stands in for a case and records the temporary's mode when asked to
+        serialise, i.e. at the moment the first data would be written."""
+
+        def model_dump_json(self) -> str:
+            observed.extend(
+                stat.S_IMODE(candidate.stat().st_mode)
+                for candidate in tmp_path.glob(".d.jsonl.*.tmp")
+            )
+            return make_case().model_dump_json()
+
+    write_cases(path, [_RecordingCase()])  # type: ignore[list-item]
+    assert observed == [0o600]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

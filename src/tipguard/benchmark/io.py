@@ -91,10 +91,14 @@ def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = _create_temporary(path.parent, path.name)
     try:
+        # Narrowed before a single line is written: the kernel's umask-derived
+        # mode can be broader than the dataset's own, and the temporary must
+        # never hold dataset content at permissions the destination does not
+        # already grant.
+        _match_destination_mode(temporary, path)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             for case in cases:
                 handle.write(case.model_dump_json() + "\n")
-        _match_destination_mode(temporary, path)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
