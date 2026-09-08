@@ -11,13 +11,7 @@ from pydantic import BaseModel
 
 
 def _sort_key(item: object) -> str:
-    return json.dumps(item, sort_keys=True, default=str)
-
-
-def _key(key: object) -> str:
-    if isinstance(key, Enum):
-        return str(key.value)
-    return str(key)
+    return json.dumps(item, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _canonical(obj: object) -> object:
@@ -26,7 +20,8 @@ def _canonical(obj: object) -> object:
     if isinstance(obj, Path):
         return str(obj)
     if isinstance(obj, dict):
-        return {_key(key): _canonical(value) for key, value in obj.items()}
+        pairs = [[_canonical(key), _canonical(value)] for key, value in obj.items()]
+        return sorted(pairs, key=_sort_key)
     if isinstance(obj, set | frozenset):
         return sorted((_canonical(item) for item in obj), key=_sort_key)
     if isinstance(obj, list | tuple):

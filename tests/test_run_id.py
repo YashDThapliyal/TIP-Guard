@@ -65,16 +65,30 @@ def test_config_hash_handles_mixed_type_dict_keys() -> None:
     assert first == second
 
 
+def test_config_hash_distinguishes_keys_with_same_string_form() -> None:
+    both_orders = [
+        {1: "a", "1": "b"},
+        {"1": "b", 1: "a"},
+    ]
+    hashes = {config_hash(CfgWithParams(params={"lookup": lookup})) for lookup in both_orders}
+    assert len(hashes) == 1  # order-independent
+
+    only_int = config_hash(CfgWithParams(params={"lookup": {1: "a"}}))
+    only_str = config_hash(CfgWithParams(params={"lookup": {"1": "b"}}))
+    (both,) = hashes
+    assert both != only_int
+    assert both != only_str
+    assert only_int != only_str
+
+
 def test_config_hash_uses_enum_value_not_repr() -> None:
-    expected_canonical = json.dumps({"color": "red"}, sort_keys=True, separators=(",", ":"))
+    expected_canonical = json.dumps([["color", "red"]], separators=(",", ":"))
     expected = hashlib.sha256(expected_canonical.encode("utf-8")).hexdigest()
     assert config_hash(CfgWithEnum(color=PlainColor.RED)) == expected
 
 
 def test_config_hash_is_stable_for_path_fields() -> None:
-    expected_canonical = json.dumps(
-        {"path": "configs/a.yaml"}, sort_keys=True, separators=(",", ":")
-    )
+    expected_canonical = json.dumps([["path", "configs/a.yaml"]], separators=(",", ":"))
     expected = hashlib.sha256(expected_canonical.encode("utf-8")).hexdigest()
     assert config_hash(CfgWithPath(path=Path("configs/a.yaml"))) == expected
 
