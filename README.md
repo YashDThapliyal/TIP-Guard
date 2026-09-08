@@ -34,11 +34,41 @@ No `.env.example` file is used; local secrets should only ever be set as environ
 uv run tipguard version
 ```
 
+Validate a benchmark dataset against the schema and a policies file:
+
+```bash
+uv run tipguard validate-dataset data/generated/smoke.jsonl
+```
+
+Run an experiment configuration end to end:
+
 ```bash
 uv run tipguard evaluate --config experiments/smoke-test.yaml
 ```
 
-The `evaluate` command becomes available after Task 8 of the foundation build.
+`evaluate` accepts an optional `--run-id` (otherwise one is derived from the experiment name, a
+timestamp, and a hash of the resolved config) and `--limit N` to evaluate only the first `N`
+cases. It seeds the run, loads the dataset and provider config, runs every case through the
+configured guardrail, prints the run directory and a compact per-case-type summary table
+(`type count blocked leaked correct`), and exits 1 with the error message if the config or
+dataset is invalid or a provider call fails.
+
+Each run writes to `<output_dir>/<run_id>/` (`output_dir` defaults to `reports/runs`, which is
+git-ignored):
+
+- `results.jsonl` — one `CaseRecord` JSON object per line, in dataset order.
+- `summary.json` — the aggregate `RunSummary` (per-case-type counts, cost, latency percentiles).
+- `manifest.json` — run metadata: `run_id`, `created_at`, `config_path`, the resolved `config`,
+  `config_hash`, `dataset_sha256`, `tipguard_version`, `python_version`, `defense`, and
+  `main_model`.
+
+Set the `TIPGUARD_OUTPUT_DIR` environment variable to override `output_dir` from a config file
+without editing it (used by the smoke-reproducibility test so it never writes into
+`reports/runs`):
+
+```bash
+TIPGUARD_OUTPUT_DIR=/tmp/tipguard-runs uv run tipguard evaluate --config experiments/smoke-test.yaml
+```
 
 ## Development
 

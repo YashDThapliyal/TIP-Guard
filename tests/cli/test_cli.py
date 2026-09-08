@@ -29,3 +29,11 @@ def test_validate_dataset_reports_issues(tmp_path, repo_root) -> None:  # type: 
     )
     assert result.exit_code == 1
     assert "duplicate case_id" in result.stdout
+
+
+def test_evaluate_reports_bad_config(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("name: x\n")
+    result = runner.invoke(app, ["evaluate", "--config", str(bad)])
+    assert result.exit_code == 1
+    assert "bad.yaml" in result.stdout
