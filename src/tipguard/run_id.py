@@ -15,18 +15,36 @@ def _sort_key(item: object) -> str:
 
 
 def _canonical(obj: object) -> object:
+    """Encode obj into a JSON-safe tree where every node carries a type tag.
+
+    Uniform tagging (including every leaf) means a user-supplied literal
+    list can never be crafted to look like a mapping, set, or any other
+    tagged node: e.g. ["map", ...] as raw input canonicalizes to
+    ["list", [["str", "map"], ...]], which cannot collide with the real
+    ["map", ...] produced for an actual dict.
+    """
     if isinstance(obj, Enum):
         return _canonical(obj.value)
     if isinstance(obj, Path):
-        return str(obj)
+        return _canonical(str(obj))
     if isinstance(obj, dict):
         pairs = [[_canonical(key), _canonical(value)] for key, value in obj.items()]
-        return ["__map__", sorted(pairs, key=_sort_key)]
+        return ["map", sorted(pairs, key=_sort_key)]
     if isinstance(obj, set | frozenset):
-        return sorted((_canonical(item) for item in obj), key=_sort_key)
+        return ["set", sorted((_canonical(item) for item in obj), key=_sort_key)]
     if isinstance(obj, list | tuple):
-        return [_canonical(item) for item in obj]
-    return obj
+        return ["list", [_canonical(item) for item in obj]]
+    if isinstance(obj, bool):
+        return ["bool", obj]
+    if isinstance(obj, str):
+        return ["str", obj]
+    if isinstance(obj, int):
+        return ["int", obj]
+    if isinstance(obj, float):
+        return ["float", repr(obj)]
+    if obj is None:
+        return ["null"]
+    return ["str", str(obj)]
 
 
 def config_hash(config: BaseModel) -> str:
