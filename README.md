@@ -7,6 +7,14 @@ and a reproducible evaluation framework for measuring whether canonicalization d
 violations more effectively than conventional filtering, without significantly harming legitimate
 reasoning tasks.
 
+## Documentation
+
+- [`docs/project-plan.md`](docs/project-plan.md) is the binding project specification for all nine phases.
+- [`docs/project-spec.md`](docs/project-spec.md) restates the objective, scope, architecture, success criteria, and non-goals.
+- [`docs/threat-model.md`](docs/threat-model.md) defines the protected assets, the attacker, and what counts as a policy violation.
+- [`docs/safety-protocol.md`](docs/safety-protocol.md) sets the rules for synthetic data, code safety, logging, and release.
+- [`docs/research-questions.md`](docs/research-questions.md) states the primary question and hypotheses H1 to H5.
+
 ## Requirements
 
 - Python 3.12
