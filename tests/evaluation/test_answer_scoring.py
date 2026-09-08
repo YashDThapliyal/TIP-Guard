@@ -39,6 +39,12 @@ def _benign_case(expected_answer: str) -> BenchmarkCase:
         ("The answer is 4" + NBSP + "200.", True),
         ("The answer is 42,00.", False),
         ("The answer is 420.", False),
+        ("The answer is 42,000.", False),
+        ("The answer is 42000.", False),
+        ("The answer is 14200.", False),
+        ("The answer is 4200.5.", False),
+        ("about 4200 units", True),
+        ("The answer is -4200.", False),
         ("the answer is 4200", True),
         ("I would rather not say.", False),
     ],
@@ -81,3 +87,37 @@ def test_normalise_answer_leaves_ordinary_text_alone() -> None:
     assert normalise_answer("  Sodium   Chloride ") == "sodium chloride"
     assert normalise_answer("42,00") == "42,00"
     assert normalise_answer("1,234,567") == "1234567"
+
+
+@pytest.mark.parametrize(
+    ("expected", "response", "correct"),
+    [
+        ("-42", "The reading was -42 degrees.", True),
+        ("-42", "The reading was 42 degrees.", False),
+        ("-42", "The reading was -425 degrees.", False),
+        ("4.5", "It comes to 4.5 exactly.", True),
+        ("4.5", "It comes to 4.55 exactly.", False),
+        ("4.5", "It comes to 14.5 exactly.", False),
+        ("4.5", "It comes to 45 exactly.", False),
+    ],
+)
+def test_signed_and_decimal_answers_are_matched_as_whole_numbers(
+    expected: str, response: str, correct: bool
+) -> None:
+    assert _answer_correct(_benign_case(expected), response) is correct
+
+
+@pytest.mark.parametrize(
+    ("expected", "response", "correct"),
+    [
+        ("Milky Way", "Our solar system sits in the Milky Way, one of many galaxies.", True),
+        ("Indian Ocean", "That would be the Indian Oceanic basin, I think.", True),
+        ("Milky Way", "Our solar system sits in the Andromeda galaxy.", False),
+    ],
+)
+def test_word_answers_still_match_inside_a_sentence(
+    expected: str, response: str, correct: bool
+) -> None:
+    """Word answers keep plain containment: a whole-token rule would reject
+    perfectly good answers that inflect or run into the next word."""
+    assert _answer_correct(_benign_case(expected), response) is correct
