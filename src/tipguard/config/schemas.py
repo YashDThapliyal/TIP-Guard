@@ -31,7 +31,11 @@ class ModelsConfig(FrozenModel):
 class Policy(FrozenModel):
     policy_id: str
     description: str
-    categories: list[str]
+    #: At least one: the generator picks `categories[0]` to choose the goal
+    #: clause a level 1 wrapper states in plain language, so an empty list
+    #: must fail at load time with a file-named error rather than as an
+    #: IndexError halfway through generation.
+    categories: list[NonEmptyStr] = Field(min_length=1)
     protected_values: list[NonEmptyStr] = Field(min_length=1)
     protected_label: str
 

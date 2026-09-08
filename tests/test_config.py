@@ -130,6 +130,34 @@ def test_policy_rejects_whitespace_only_protected_value() -> None:
         )
 
 
+def test_policy_requires_at_least_one_category() -> None:
+    with pytest.raises(ValidationError):
+        Policy(
+            policy_id="p",
+            description="d",
+            categories=[],
+            protected_label="l",
+            protected_values=["v"],
+        )
+
+
+def test_policies_file_without_categories_raises_config_error(tmp_path: Path) -> None:
+    """The generator reads categories[0], so an empty list must fail at load."""
+    path = tmp_path / "policies.yaml"
+    path.write_text(
+        "policies:\n"
+        "  - policy_id: p\n"
+        "    description: d\n"
+        "    categories: []\n"
+        "    protected_label: l\n"
+        '    protected_values: ["v"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_yaml_model(path, PoliciesConfig)
+    assert "policies.yaml" in str(exc.value) and "categories" in str(exc.value)
+
+
 def test_benchmark_config_loads_from_repo(repo_root: Path) -> None:
     cfg = load_yaml_model(repo_root / "configs" / "benchmark.yaml", BenchmarkConfig)
     assert cfg.name == "tipguard-v1"

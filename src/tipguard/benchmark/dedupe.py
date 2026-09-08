@@ -5,10 +5,18 @@ extra and inflate every score computed over the set, so they are dropped. An
 exact repeat is caught by the normalised prompt; a near repeat by five-gram
 word shingles compared with Jaccard similarity.
 
-Near-duplicates are only sought *within* a case type. A hard negative that
-quotes an attack is meant to look like that attack: it is the whole point of
-the control, and removing it would delete exactly the cases that separate a
-guardrail from a keyword filter.
+Near-duplicates are only sought between cases that mean the same thing: same
+case type, same policy, same canonical intent. Two prompts that share a
+wrapper but hide different instructions, or hide the same instruction against
+different policies, are not repetition; an encoded payload is a single
+whitespace-delimited token, so without this restriction a shared wrapper and
+distractor alone would push them past the threshold and collapse the family
+and policy coverage the study reports. A hard negative that quotes an attack
+is meant to look like that attack, which is the same argument for a different
+reason: it is the whole point of the control.
+
+Exact repeats are removed unconditionally. An identical prompt is a duplicate
+whatever it is labelled, and `validate_cases` flags one regardless of type.
 
 Comparison is driven by a shingle index rather than by every earlier case, so
 a prompt sharing no five-gram with anything kept is never compared at all.
@@ -27,6 +35,14 @@ SHINGLE_SIZE = 5
 JACCARD_THRESHOLD = 0.9
 
 Shingle = tuple[str, ...]
+
+#: What two cases must agree on before their prompts are compared at all.
+SimilarityGroup = tuple[CaseType, str | None, str]
+
+
+def similarity_group(case: BenchmarkCase) -> SimilarityGroup:
+    """The cases `case` may be considered a near-duplicate of."""
+    return (case.case_type, case.policy_id, case.canonical_intent)
 
 
 def shingles(prompt: str) -> frozenset[Shingle]:
@@ -55,21 +71,21 @@ class _ShingleIndex:
 
     def __init__(self) -> None:
         self._sets: list[frozenset[Shingle]] = []
-        self._by_shingle: dict[tuple[CaseType, Shingle], list[int]] = {}
+        self._by_shingle: dict[tuple[SimilarityGroup, Shingle], list[int]] = {}
 
-    def has_near_duplicate(self, case_type: CaseType, candidate: frozenset[Shingle]) -> bool:
+    def has_near_duplicate(self, group: SimilarityGroup, candidate: frozenset[Shingle]) -> bool:
         seen: set[int] = set()
         for shingle in candidate:
-            seen.update(self._by_shingle.get((case_type, shingle), ()))
+            seen.update(self._by_shingle.get((group, shingle), ()))
         return any(
             jaccard(candidate, self._sets[position]) >= JACCARD_THRESHOLD for position in seen
         )
 
-    def add(self, case_type: CaseType, candidate: frozenset[Shingle]) -> None:
+    def add(self, group: SimilarityGroup, candidate: frozenset[Shingle]) -> None:
         position = len(self._sets)
         self._sets.append(candidate)
         for shingle in candidate:
-            self._by_shingle.setdefault((case_type, shingle), []).append(position)
+            self._by_shingle.setdefault((group, shingle), []).append(position)
 
 
 def dedupe_cases(cases: Sequence[BenchmarkCase]) -> tuple[BenchmarkCase, ...]:
@@ -81,10 +97,11 @@ def dedupe_cases(cases: Sequence[BenchmarkCase]) -> tuple[BenchmarkCase, ...]:
         normalised = normalise_prompt(case.prompt)
         if normalised in seen_prompts:
             continue
+        group = similarity_group(case)
         candidate = shingles(case.prompt)
-        if index.has_near_duplicate(case.case_type, candidate):
+        if index.has_near_duplicate(group, candidate):
             continue
         seen_prompts.add(normalised)
-        index.add(case.case_type, candidate)
+        index.add(group, candidate)
         kept.append(case)
     return tuple(kept)

@@ -211,3 +211,23 @@ def test_generate_reports_a_bad_config(tmp_path) -> None:  # type: ignore[no-unt
     result = runner.invoke(app, ["generate", "--config", str(bad)])
     assert result.exit_code == 1
     assert "bad.yaml" in result.stdout
+
+
+def test_generate_reports_an_unwritable_output_path(tmp_path, repo_root) -> None:  # type: ignore[no-untyped-def]
+    directory = tmp_path / "already-a-directory"
+    directory.mkdir()
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--config",
+            str(repo_root / "configs/benchmark.yaml"),
+            "--out",
+            str(directory),
+            "--limit",
+            "5",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "already-a-directory" in result.stdout
+    assert "cannot write" in result.stdout

@@ -2,6 +2,7 @@
 
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -122,17 +123,46 @@ def _type_counts(cases: Sequence[BenchmarkCase]) -> str:
     return " ".join(f"{name}={counts[name]}" for name in sorted(counts))
 
 
-def _build(
-    config: Path, limit: int | None
-) -> tuple[BenchmarkConfig, tuple[BenchmarkCase, ...], int]:
-    """Generate and dedupe, returning the config, the cases, and how many went."""
+@dataclass(frozen=True)
+class _Generated:
+    """Everything `generate` needs after the fallible work has succeeded."""
+
+    destination: Path
+    cases: tuple[BenchmarkCase, ...]
+    removed: int
+    issues: tuple[ValidationIssue, ...]
+
+
+def _write_dataset(path: Path, cases: Sequence[BenchmarkCase]) -> None:
+    """Write the JSONL, turning an I/O failure into the standard dataset error.
+
+    An `--out` naming a directory, a missing parent that cannot be created or
+    a read-only location must reach the user as the same one-line, redacted
+    message every other failure does, not as a traceback.
+    """
+    try:
+        write_cases(path, cases)
+    except OSError as exc:
+        raise DatasetError(f"{path}: cannot write file: {exc}") from exc
+
+
+def _build(config: Path, out: Path | None, limit: int | None) -> _Generated:
+    """Generate, dedupe, truncate to `limit`, and validate what will be written.
+
+    `removed` counts what deduplication dropped, before any truncation.
+    """
     benchmark = load_yaml_model(config, BenchmarkConfig)
     policies = load_yaml_model(benchmark.policies_config, PoliciesConfig)
     bank = TemplateBank.load(benchmark.templates_dir, policies)
     generated = generate_cases(benchmark, bank, policies)
     kept = dedupe_cases(generated)
-    removed = len(generated) - len(kept)
-    return benchmark, kept[:limit] if limit is not None else kept, removed
+    cases = kept[:limit] if limit is not None else kept
+    return _Generated(
+        destination=out or benchmark.output,
+        cases=cases,
+        removed=len(generated) - len(kept),
+        issues=validate_cases(cases, policies),
+    )
 
 
 @app.command()
@@ -146,18 +176,20 @@ def generate(
     """Generate the benchmark dataset, deduplicate it, validate it, and write JSONL."""
     protected = _benchmark_protected_values(config)
     try:
-        benchmark, cases, removed = _build(config, limit)
-        issues = validate_cases(cases, load_yaml_model(benchmark.policies_config, PoliciesConfig))
+        built = _build(config, out, limit)
+        if not built.issues:
+            _write_dataset(built.destination, built.cases)
     except (ConfigError, DatasetError, ValueError) as exc:
         _echo(str(exc), protected)
         raise typer.Exit(code=1) from exc
-    if issues:
-        _report_issues(issues, protected)
+    if built.issues:
+        _report_issues(built.issues, protected)
         raise typer.Exit(code=1)
-    destination = out or benchmark.output
-    write_cases(destination, cases)
-    typer.echo(f"wrote {len(cases)} cases to {destination} ({removed} removed as duplicates)")
-    typer.echo(_type_counts(cases))
+    typer.echo(
+        f"wrote {len(built.cases)} cases to {built.destination} "
+        f"({built.removed} removed as duplicates)"
+    )
+    typer.echo(_type_counts(built.cases))
 
 
 if __name__ == "__main__":
