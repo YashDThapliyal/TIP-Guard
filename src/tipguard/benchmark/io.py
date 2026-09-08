@@ -1,8 +1,8 @@
 """JSONL read/write for benchmark cases."""
 
 import os
+import secrets
 import stat
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -10,9 +10,14 @@ from pydantic import ValidationError
 
 from tipguard.benchmark.schema import BenchmarkCase
 
-#: The mode a newly created file would get before the umask is applied, i.e.
-#: what `open()` would have used.
-DEFAULT_FILE_MODE = 0o666
+#: The mode the temporary file is created with. The kernel applies the process
+#: umask to it, so an ordinary `open()` and this produce the same permissions
+#: without the umask ever being read or cleared.
+TEMPORARY_FILE_MODE = 0o666
+
+#: How many names to try before giving up. A collision needs two 64-bit random
+#: suffixes to match, so one retry is already generous.
+TEMPORARY_NAME_ATTEMPTS = 8
 
 
 class DatasetError(ValueError):
@@ -37,18 +42,41 @@ def load_cases(path: Path) -> tuple[BenchmarkCase, ...]:
     return tuple(cases)
 
 
-def _destination_mode(path: Path) -> int:
-    """The mode the written file should end up with.
+def _unique_suffix() -> str:
+    return secrets.token_hex(8)
 
-    An existing destination keeps the permissions it already had; a new one
-    gets what an ordinary `open()` would have given it under the current umask.
+
+def _create_temporary(directory: Path, name: str) -> tuple[int, Path]:
+    """Create a fresh file beside the destination and return its descriptor.
+
+    Opened with `O_EXCL` so an existing file is never taken over, and with a
+    permissive mode so the kernel narrows it by the umask itself. Reading the
+    umask instead, which is the usual idiom, would mean clearing it process-wide
+    for an instant and letting any concurrent file creation escape it.
+    """
+    for _ in range(TEMPORARY_NAME_ATTEMPTS):
+        candidate = directory / f".{name}.{_unique_suffix()}.tmp"
+        try:
+            descriptor = os.open(
+                candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, TEMPORARY_FILE_MODE
+            )
+        except FileExistsError:
+            continue
+        return descriptor, candidate
+    raise OSError(f"{directory}: cannot create a temporary file for {name}")
+
+
+def _match_destination_mode(temporary: Path, destination: Path) -> None:
+    """Give the replacement the permissions of the file it replaces.
+
+    Only when there is one: a new destination keeps what the kernel derived
+    from the umask, which is what a plain `open()` would have produced.
     """
     try:
-        return stat.S_IMODE(path.stat().st_mode)
+        mode = stat.S_IMODE(destination.stat().st_mode)
     except OSError:
-        umask = os.umask(0)
-        os.umask(umask)
-        return DEFAULT_FILE_MODE & ~umask
+        return
+    temporary.chmod(mode)
 
 
 def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
@@ -61,19 +89,12 @@ def write_cases(path: Path, cases: Sequence[BenchmarkCase]) -> None:
     rename; a failure leaves the previous file exactly as it was.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    mode = _destination_mode(path)
-    handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
-        "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
-    )
-    temporary = Path(handle.name)
+    descriptor, temporary = _create_temporary(path.parent, path.name)
     try:
-        with handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             for case in cases:
                 handle.write(case.model_dump_json() + "\n")
-        # A temporary file is created 0600, and the rename would make that the
-        # dataset's mode: a previously group- or world-readable dataset would
-        # silently become owner-only on every rewrite.
-        temporary.chmod(mode)
+        _match_destination_mode(temporary, path)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

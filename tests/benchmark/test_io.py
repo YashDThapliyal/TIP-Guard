@@ -85,3 +85,38 @@ def test_write_cases_creates_a_file_with_the_usual_mode(tmp_path: Path) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     assert mode != 0o600
     assert mode == 0o666 & ~umask
+
+
+def test_write_cases_never_touches_the_process_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reading the umask means clearing it process-wide for an instant, which
+    would widen the permissions of any file another thread creates meanwhile."""
+
+    def _forbidden(mask: int) -> int:
+        raise AssertionError("write_cases must not query or change the umask")
+
+    monkeypatch.setattr(os, "umask", _forbidden)
+    path = tmp_path / "d.jsonl"
+    write_cases(path, (make_case(),))
+    write_cases(path, (make_case(),))
+    assert load_cases(path) == (make_case(),)
+
+
+def test_write_cases_never_takes_over_an_existing_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Names are exclusive, so a leftover temporary is a clean failure rather
+    than a file two writers share."""
+    from tipguard.benchmark import io as io_module
+
+    monkeypatch.setattr(io_module, "_unique_suffix", lambda: "fixed")
+    path = tmp_path / "d.jsonl"
+    write_cases(path, (make_case(),))
+    before = path.read_text(encoding="utf-8")
+    squatter = tmp_path / ".d.jsonl.fixed.tmp"
+    squatter.write_text("someone else's", encoding="utf-8")
+    with pytest.raises(OSError, match="cannot create a temporary file"):
+        write_cases(path, (make_case(case_id="tip-base64-l1-0002", prompt="other"),))
+    assert path.read_text(encoding="utf-8") == before
+    assert squatter.read_text(encoding="utf-8") == "someone else's"
