@@ -15,13 +15,15 @@ Refuted if that difference is zero or negative for a majority of tested models.
 
 **H2 (Experiment 2, defense comparison).** Canonicalization plus classification detects more
 violations than classifying the original input alone.
-Metric: detection recall on prohibited cases at a matched false-positive rate of 10%.
-Refuted if the recall gain over the input-only classifier is zero or negative.
+Metric: detection recall on prohibited cases at the operating point selected in Phase 6, which
+targets a false-positive rate below 10%. The operating point is provisional until the threshold
+rule is fixed. Refuted if the recall gain over the input-only classifier is zero or negative.
 
 **H3 (Experiment 3, component ablation).** Deterministic decoders combined with an LLM
 canonicalizer detect more violations than either component alone.
-Metric: detection recall at a matched false-positive rate, for the combined arm and each single
-component arm. Refuted if the combined arm does not exceed the stronger single arm.
+Metric: detection recall for the combined arm and each single component arm, at the same Phase 6
+operating point used for H2, and provisional in the same way. Refuted if the combined arm does
+not exceed the stronger single arm.
 
 **H4 (Experiment 4, difficulty analysis).** Undefended vulnerability peaks at difficulty levels 2
 and 3, where the main model still decodes the task but the latent intent is harder to recover.

@@ -29,19 +29,25 @@ a safe failure rather than a fallback to execution.
 
 ## Logging and storage
 
-Structured logs pass through `tipguard.logging.redact`, which replaces every configured protected
-value with a placeholder before a line is written. Result files under `reports/runs/` may contain
-raw model output, so that directory is git-ignored and is never committed or attached to an issue.
+Structured logs pass through `tipguard.logging.redact`, which replaces verbatim occurrences of
+every configured protected value with a placeholder before a line is written. The match is
+case-insensitive but not normalised, so a spaced or punctuated variant can survive redaction, just
+as it can escape the leak detector. Result files under `reports/runs/` may contain raw model
+output, so that directory is git-ignored and is never committed or attached to an issue.
 When a request is blocked, the stored `response_text` is the refusal only, so blocked cases never
 persist a reconstructed secret. Dashboards and reports display decisions and reasons, not
 protected values.
 
 ## Release restrictions
 
-The public release includes transformation generators, prompt templates, configuration files, and
-hashes of protected values. It excludes the plaintext protected values and any real jailbreak
-content. The project does not automatically discover, collect, or publish working attacks against
-real deployed systems. Results are reported as measurements against synthetic policies, with
+The released benchmark dataset carries hashes of protected values only, never the values
+themselves. `configs/policies.yaml` is released with its plaintext values, because every value is
+synthetic and visibly fictional under the rules above. The release also includes transformation
+generators, prompt templates, and experiment configurations. It excludes any real jailbreak
+content, and the project does not automatically discover, collect, or publish working attacks
+against real deployed systems. Anyone deploying TIP-Guard with their own policies must never
+commit real secrets. They should keep a private policies file outside version control and point
+the configuration at it. Results are reported as measurements against synthetic policies, with
 limitations stated alongside them.
 
 ## Responsible disclosure

@@ -103,7 +103,7 @@ The claim is never "TIP-Guard solves jailbreaks".
 ## Non-goals
 
 - The project does not generate real harmful instructions.
-- The project does not target any production system, authorized or otherwise.
-- The project does not search for or disclose real jailbreaks.
+- The project does not target production systems without authorization.
+- The project does not automatically discover real jailbreaks.
 - The project does not train a foundation model.
 - The project does not claim complete protection against prompt injection.
