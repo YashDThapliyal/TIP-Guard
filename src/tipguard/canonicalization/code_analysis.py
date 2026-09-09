@@ -43,6 +43,12 @@ MAX_STEPS = 10_000
 #: Longest sequence a comprehension may iterate.
 MAX_ITERATIONS = 10_000
 
+#: The most characters one codepoint can become under a case conversion:
+#: "ﬃ" upper-cases to "FFI". Verified against the whole codepoint range by
+#: `tests/canonicalization/test_code_analysis.py`, so a future Unicode
+#: version that widens it fails there rather than silently raising the cap.
+_MAX_CASE_EXPANSION = 3
+
 BUDGET_EXCEEDED = "budget_exceeded"
 
 
@@ -204,7 +210,17 @@ def _nullary(name: str, method: Callable[[str], str]) -> Callable[..., str]:
     def call(target: object, args: Sequence[object]) -> str:
         if args:
             raise UnsupportedCodeError(f"{name} expects no arguments")
-        return method(_require_str(target, name))
+        text = _require_str(target, name)
+        # Case conversion can grow a string: "ß".upper() is "SS" and
+        # "ﬃ".upper() is "FFI", so 9,000 characters became 27,000 and left
+        # the cap behind entirely. Unicode case mapping cannot be sized from
+        # the input the way a join or a replace can, but it is bounded --
+        # `_MAX_CASE_EXPANSION` is the widest expansion any single codepoint
+        # has -- so the input is screened against that bound first and the
+        # result is checked afterwards. The worst allocation is therefore
+        # three times an already-capped string, not an unbounded one.
+        _Budget.check_length(len(text) * _MAX_CASE_EXPANSION)
+        return _Budget.check_string(method(text))
 
     return call
 
