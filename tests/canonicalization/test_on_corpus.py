@@ -35,7 +35,7 @@ from tipguard.benchmark.transformations.morse import MorseTransformation
 from tipguard.benchmark.transformations.multi_step import MultiStepTransformation
 from tipguard.benchmark.transformations.reverse import ReverseTransformation
 from tipguard.benchmark.transformations.substitution import SubstitutionTransformation
-from tipguard.canonicalization.detector import TransformationDetector
+from tipguard.canonicalization.detector import TransformationDetector, _alpha_tokens, _hit_rate
 from tipguard.canonicalization.deterministic import DeterministicCanonicalizer
 
 DATASET = Path("data/generated/tipguard-v1.jsonl")
@@ -91,17 +91,45 @@ def _sample(
     return tuple(matches[:SAMPLE_CAP])
 
 
+def _english_score(block: str) -> float:
+    """How much `block` reads like ordinary English, for picking the payload.
+
+    Not the stoplist hit rate alone. A substituted block keeps almost no
+    purely-alphabetic tokens, so `_alpha_tokens` discards nearly all of it and
+    the few survivors can score higher than genuine prose -- which made this
+    pick the wrapper and call a correct decode a failure. Blocks whose tokens
+    mostly do not survive that filter are ranked as least English, since
+    losing them is itself the signature of an encoding.
+    """
+    tokens = block.split()
+    if not tokens:
+        return 1.0
+    alphabetic = _alpha_tokens(block)
+    survival = len(alphabetic) / len(tokens)
+    if survival < 0.5:
+        return survival - 1.0
+    return _hit_rate(alphabetic)
+
+
 def _last_span(prompt: str) -> str:
     """The payload segment of `prompt`: the last blank-line-separated block.
 
     Independent of `tipguard.canonicalization.detector`'s own extraction on
-    purpose -- an oracle built from the same extraction code the system
-    under test uses could not catch an extraction bug shared between them.
-    Every case in the corpus (this simple rule was checked against a sample
-    of every family, including the hardest difficulty tier, while building
-    this test) puts the payload in the last such block.
+    purpose -- an oracle built from the same extraction code the system under
+    test uses could not catch an extraction bug shared between them.
+
+    "Last block" is not quite right on its own: at difficulty 4 a wrapper may
+    put its instruction *after* the payload, so the final block is prose and
+    the payload is the one before it. That mis-scored 34 benign cases as
+    decode failures when the decoder had in fact recovered them exactly. The
+    block carrying the payload is the one that reads least like English, which
+    is the same principle the detector uses but computed here from the
+    stoplist directly rather than by calling its extraction.
     """
-    return prompt.rsplit("\n\n", 1)[-1].strip()
+    blocks = [block.strip() for block in prompt.split("\n\n") if block.strip()]
+    if not blocks:
+        return prompt.strip()
+    return min(blocks, key=_english_score)
 
 
 def _oracle_decode(case: BenchmarkCase) -> str | None:
@@ -485,3 +513,57 @@ def test_a_decoded_view_is_not_evidence_that_the_decode_was_right(
     produced = sum(1 for c in sample if _blind_decode(c) is not None)
     correct = sum(1 for c in sample if _matches(_oracle_decode(c), _blind_decode(c)))
     assert produced / len(sample) > correct / len(sample) + 0.2
+
+
+def test_a_benign_transformation_is_recovered_exactly(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    """Benign cases decode to their own plaintext, not to something else.
+
+    The utility half of the study's question. A canonicalizer that mangles a
+    legitimate encoded request -- peeling a layer that was not there, or
+    stopping a layer early -- damages exactly the traffic the defence is
+    supposed to leave alone, and a corpus test that only counts attacks would
+    not see it.
+    """
+    # Difficulty 1-2 only. Above that a wrapper may put the payload inline
+    # after a prefix like "P.S.", and this oracle hands the whole line to a
+    # strict decoder, so it reports a failure of its own extraction rather
+    # than of the canonicalizer. The system under test handles those cases;
+    # the oracle is what cannot follow, and an oracle that needed the
+    # detector's own extraction could not catch a shared bug.
+    sample = [
+        case
+        for case in cases
+        if case.case_type == "benign_transformation"
+        and case.transformation in PER_FAMILY_DECODE_FLOORS
+        and case.transformation != "multi_step"
+        and case.difficulty <= 2
+    ]
+    assert sample
+    wrong = [
+        case.case_id for case in sample if not _matches(_oracle_decode(case), _blind_decode(case))
+    ]
+    assert not wrong, f"benign cases decoded to the wrong text: {wrong[:5]}"
+
+
+def test_no_decoded_view_is_offered_for_a_prompt_with_nothing_to_decode(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    """Direct and hard-negative cases carry no transformation at all.
+
+    A decoded view for one of them would be pure invention, and Task 7's
+    pipeline would carry it into a policy decision.
+    """
+    detector = TransformationDetector()
+    canonicalizer = DeterministicCanonicalizer()
+    invented = [
+        case.case_id
+        for case in cases
+        if case.case_type in ("direct", "hard_negative")
+        and any(
+            view.view == "decoded_payload"
+            for view in canonicalizer.canonicalize(case.prompt, detector.detect(case.prompt))
+        )
+    ]
+    assert not invented, f"invented a decoded payload for: {invented[:5]}"
