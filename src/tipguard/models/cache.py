@@ -22,10 +22,33 @@ def cache_key(provider_name: str, model: str, request: ModelRequest, namespace: 
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+#: How long a writer waits for another process's lock before giving up.
+#: A sweep of several experiment configs shares one cache file, and a write
+#: that collides with another process's commit should queue rather than fail
+#: the run it belongs to.
+BUSY_TIMEOUT_SECONDS = 30.0
+
+
 class ResponseCache:
+    """A SQLite response cache, one connection per instance.
+
+    The connection is not shared: `sqlite3` refuses cross-thread use by
+    default, and this class adds no lock of its own, so each thread or
+    process that wants the cache constructs its own `ResponseCache` over the
+    same file. WAL is what makes that safe to do concurrently — readers do
+    not block the writer and the writer does not block readers — and the busy
+    timeout is what stops the one writer at a time SQLite still allows from
+    raising "database is locked" the instant two of them overlap.
+
+    WAL is a property of the database file, so it survives close and is
+    re-declared here only because a cache file may have been created before
+    this was set.
+    """
+
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS responses (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )

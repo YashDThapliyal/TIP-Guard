@@ -4,9 +4,20 @@ from pathlib import Path
 import pytest
 
 from tipguard.config.schemas import ModelSpec
-from tipguard.models.cache import CachedProvider, ResponseCache, cache_key
+from tipguard.models.cache import (
+    BUSY_TIMEOUT_SECONDS,
+    CachedProvider,
+    ResponseCache,
+    cache_key,
+)
 from tipguard.models.mock import MockProvider
-from tipguard.models.types import ModelRequest
+from tipguard.models.types import ModelRequest, ModelResponse
+
+
+def _a_response() -> ModelResponse:
+    return ModelResponse(
+        text="t", model="m", provider="mock", input_tokens=1, output_tokens=1, latency_ms=1.0
+    )
 
 
 class CountingProvider(MockProvider):
@@ -144,3 +155,29 @@ def test_cache_hit_without_spec_keeps_the_stored_cost(tmp_path: Path) -> None:
     )
     assert hit.cached is True
     assert hit.cost_usd == 123.0
+
+
+def test_cache_uses_wal_and_a_busy_timeout(tmp_path: Path) -> None:
+    # A concurrent sweep shares one cache file: WAL lets a reader and the
+    # writer overlap, and the busy timeout makes two writers queue instead
+    # of failing the run they belong to.
+    cache = ResponseCache(tmp_path / "responses.sqlite")
+    try:
+        mode = cache._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout_ms = cache._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    finally:
+        cache.close()
+    assert mode == "wal"
+    assert timeout_ms == int(BUSY_TIMEOUT_SECONDS * 1000)
+
+
+def test_two_caches_over_one_file_both_see_the_row(tmp_path: Path) -> None:
+    path = tmp_path / "responses.sqlite"
+    writer = ResponseCache(path)
+    reader = ResponseCache(path)
+    try:
+        writer.put("k", _a_response())
+        assert reader.get("k") is not None
+    finally:
+        writer.close()
+        reader.close()
