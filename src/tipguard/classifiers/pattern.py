@@ -60,6 +60,10 @@ SUBSTITUTION_SYMBOLS = "@€!°$+#%&*"
 #: a single leeted phrase inside a long benign wrapper; a quarter is well
 #: above the density of ordinary prose, which is near zero once punctuation
 #: and whitespace are excluded.
+#: Fewest digits in the run before a label-plus-number reads as an
+#: identifier rather than as a substituted letter.
+MIN_IDENTIFIER_DIGITS = 2
+
 _DIGIT_RUN = re.compile(r"\d+")
 
 DENSITY_WINDOW = 12
@@ -172,7 +176,15 @@ def _is_identifier_shape(token: str) -> bool:
     if len(runs) != 1:
         return False
     start, end = runs[0]
-    return start == 0 or end == len(core)
+    if start != 0 and end != len(core):
+        return False
+    # A single replaced letter at a word's edge -- "7he", "4nd", "prin7",
+    # "i7" -- is one digit against a short label, exactly the shape of a
+    # version or a room number. Length breaks the tie: an identifier carries
+    # a number, so its digit run is two or more, while substitution replaces
+    # one letter with one glyph. Without this the rule silently unread the
+    # commonest leetspoken words in the language.
+    return end - start >= MIN_IDENTIFIER_DIGITS
 
 
 def _replacement_flags(text: str) -> list[int]:

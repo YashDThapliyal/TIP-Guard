@@ -319,7 +319,7 @@ def test_riddle_and_indirect_recall_degrades_with_difficulty(
     sample = [case for case in cases if case.transformation in ("riddle", "indirect")]
     buckets = _by_difficulty(sample)
     print("\nriddle/indirect has_transformation rate by difficulty")
-    easy_rate = 0.0
+    easy_rate: float | None = None
     for difficulty in (1, 2, 3, 4):
         bucket = buckets[difficulty]
         if not bucket:
@@ -328,7 +328,7 @@ def test_riddle_and_indirect_recall_degrades_with_difficulty(
         rate = hits / len(bucket)
         print(f"  difficulty {difficulty}: n={len(bucket):3}  has_transformation={rate:.3f}")
         if difficulty in (1, 2):
-            easy_rate = min(easy_rate, rate) if easy_rate else rate
+            easy_rate = rate if easy_rate is None else min(easy_rate, rate)
     assert easy_rate >= 0.95
 
 
@@ -400,20 +400,25 @@ def test_smoke_dataset_direct_and_hard_negative_cases_carry_no_transformation(
         assert detection.family is None, f"{case.case_id}: {detection}"
 
 
-#: Oracle-verified decode accuracy per family, difficulty 1-3. Pinned because
-#: the pooled floor alone hides which families carry it: multi_step produces a
-#: decoded view for 94% of its cases but only 46% of those views are correct,
-#: and reading "produced a view" as "decoded it" once put a wrong number in a
-#: commit message. Floors sit just under the measured rates so a real
-#: regression fails while ordinary noise does not.
+#: Oracle-verified decode accuracy per family, difficulty 1-3. Pinned per
+#: family because the pooled floor alone hides which families carry it: three
+#: families at 1.000 masked multi_step at 0.454 for a whole review round.
+#:
+#: The brief asks for 0.85 across these families. Five meet it. `multi_step`
+#: does not, and its floor is set below the brief rather than at it -- see
+#: `test_multi_step_falls_short_of_the_brief` for why that is recorded as an
+#: open shortfall rather than treated as satisfied.
 PER_FAMILY_DECODE_FLOORS = {
     "base64": 0.99,
     "caesar": 0.99,
     "morse": 0.99,
     "reverse": 0.95,
     "substitution": 0.99,
-    "multi_step": 0.44,
+    "multi_step": 0.60,
 }
+
+#: What the brief actually requires of every family in the pooled set.
+BRIEF_DECODE_FLOOR = 0.85
 
 
 @pytest.mark.parametrize(("family", "floor"), sorted(PER_FAMILY_DECODE_FLOORS.items()))
@@ -427,7 +432,48 @@ def test_per_family_decode_accuracy_is_pinned(
     assert rate >= floor, f"{family} decode accuracy {rate:.3f} is below its {floor} floor"
 
 
-def test_a_decoded_view_is_not_evidence_that_the_decode_was_right() -> None:
+@pytest.mark.parametrize("family", sorted(set(PER_FAMILY_DECODE_FLOORS) - {"multi_step"}))
+def test_every_family_but_multi_step_meets_the_brief(
+    family: str, cases: tuple[BenchmarkCase, ...]
+) -> None:
+    sample = [c for c in cases if c.transformation == family and c.difficulty <= 3]
+    correct = sum(1 for c in sample if _matches(_oracle_decode(c), _blind_decode(c)))
+    rate = correct / len(sample)
+    assert rate >= BRIEF_DECODE_FLOOR, (
+        f"{family} decode accuracy {rate:.3f} is below the brief's {BRIEF_DECODE_FLOOR}"
+    )
+
+
+def test_multi_step_falls_short_of_the_brief(cases: tuple[BenchmarkCase, ...]) -> None:
+    """A recorded shortfall, deliberately not a floor set to the failure.
+
+    The brief asks 0.85 of every family in the pooled set. Chained
+    transformations reach roughly 0.62, because recovering them needs the
+    layers' *order*, which no signature reveals: the generator applies them
+    in either order, so the visible transformation is sometimes the outer
+    one and sometimes the inner, and a wrong first peel yields near-miss
+    gibberish. A bounded search over orderings was implemented and measured
+    worse, because the stoplist hit rate it would have to optimise is too
+    weak a proxy to rank paths by.
+
+    This asserts the shortfall rather than hiding it, so that removing it
+    requires deleting a test that says why. The designed remedy is the LLM
+    canonicalizer in Task 6, which reads intent rather than inverting an
+    encoding; if it lifts this family past the brief, this test fails and
+    should be replaced by the ordinary floor.
+    """
+    sample = [c for c in cases if c.transformation == "multi_step" and c.difficulty <= 3]
+    correct = sum(1 for c in sample if _matches(_oracle_decode(c), _blind_decode(c)))
+    rate = correct / len(sample)
+    assert rate < BRIEF_DECODE_FLOOR, (
+        f"multi_step now reaches {rate:.3f}, at or above the brief's "
+        f"{BRIEF_DECODE_FLOOR}: replace this test with the ordinary floor"
+    )
+
+
+def test_a_decoded_view_is_not_evidence_that_the_decode_was_right(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
     """The distinction the per-family floors exist to keep visible.
 
     `multi_step` returns a view for almost every case and is right for fewer
@@ -435,4 +481,7 @@ def test_a_decoded_view_is_not_evidence_that_the_decode_was_right() -> None:
     near-miss reconstruction as a success, which is why the pipeline in a
     later task must weigh a view's confidence rather than its presence.
     """
-    assert PER_FAMILY_DECODE_FLOORS["multi_step"] < 0.5
+    sample = [c for c in cases if c.transformation == "multi_step" and c.difficulty <= 3]
+    produced = sum(1 for c in sample if _blind_decode(c) is not None)
+    correct = sum(1 for c in sample if _matches(_oracle_decode(c), _blind_decode(c)))
+    assert produced / len(sample) > correct / len(sample) + 0.2

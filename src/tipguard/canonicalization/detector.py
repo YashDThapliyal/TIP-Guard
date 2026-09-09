@@ -62,7 +62,7 @@ from tipguard.benchmark.transformations.base import Encoded, Family
 from tipguard.benchmark.transformations.caesar import CaesarTransformation
 from tipguard.benchmark.transformations.code_snippet import MAX_SOURCE_LENGTH
 from tipguard.canonicalization.types import DetectionResult
-from tipguard.classifiers.pattern import MORSE_RUN, PYTHON_STRING_BUILDER
+from tipguard.classifiers.pattern import MORSE_RUN, PYTHON_STRING_BUILDER, SUBSTITUTION_SYMBOLS
 from tipguard.classifiers.pattern import _has_substitution_density as has_substitution_density
 
 #: A curated set of roughly 300 of the most common English words: the closed
@@ -651,10 +651,32 @@ def _resolve_letters_family(text: str) -> LettersResolution | None:
 
 
 def _mostly_printable(text: str, threshold: float = 0.9) -> bool:
+    """Whether a decode looks like text a person wrote, not chance bytes.
+
+    ASCII, plus the substitution glyphs. `str.isprintable` accepts every
+    printable codepoint in Unicode, so mojibake counts as printable and any
+    ordinary English word long enough to be a base64 candidate can pass:
+    "deactivation" decodes to bytes printable somewhere in Unicode, which
+    made a plain English sentence a base64 detection at 0.9 confidence.
+
+    The glyphs are admitted because a layered payload's inner layer is often
+    symbol-substituted, so a correct base64 decode legitimately yields text
+    full of "€" and "°". Restricting to bare ASCII rejected 15 real
+    multi-step cases. They are a closed, known set rather than "any
+    non-ASCII", so admitting them does not reopen the mojibake hole.
+    """
     if not text:
         return False
-    printable = sum(1 for char in text if char.isprintable() or char in "\n\t")
-    return printable / len(text) >= threshold
+    allowed = set(SUBSTITUTION_SYMBOLS)
+    printable = sum(1 for char in text if (" " <= char <= "~") or char in "\n\t" or char in allowed)
+    if printable / len(text) < threshold:
+        return False
+    # And it has to look like more than one word. A short English word can
+    # decode to a run of ASCII by chance -- "circumstantially" did -- but a
+    # payload carrying an instruction has spaces in it, or at least a word
+    # the stoplist knows. Requiring one of those costs nothing on the corpus,
+    # whose payloads are all sentences.
+    return any(char.isspace() for char in text) or _hit_rate(_alpha_tokens(text)) > 0.0
 
 
 def _try_base64_decode(payload: str) -> str | None:

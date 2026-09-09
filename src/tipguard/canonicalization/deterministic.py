@@ -258,8 +258,15 @@ def _best_letters_layer(text: str) -> str | None:
 
     Rather than guess an ordering from the wrapper's prose, each candidate is
     peeled and the one whose result looks most like the next layer is kept.
-    Ties and total failure both return None, so a genuinely undecodable text
-    still stops rather than looping on noise.
+
+    A zero score is accepted, and ties keep the first candidate. That is
+    deliberate, and an earlier version of this docstring claimed the
+    opposite: an intermediate layer of a multi-step payload is still encoded,
+    so its stoplist hit rate is legitimately zero, and refusing a zero cost a
+    sixth of the multi-step cases when it was tried. The consequence is that
+    genuinely undecodable text yields a view too -- carrying confidence 0.0,
+    which is the signal a caller must read. Task 7's pipeline weighs a view's
+    confidence, never its existence.
     """
     # Only speculate on text that does not already read as language. Every
     # text can be reversed, so without this guard ordinary English would be
@@ -284,6 +291,29 @@ def _best_letters_layer(text: str) -> str | None:
     return best[0] if best is not None else None
 
 
+def _peel_remaining_layers(text: str, rounds: int = MAX_MULTI_STEP_ROUNDS - 1) -> str:
+    """Keep peeling `text` while it still looks encoded.
+
+    Shared by the single-family path and the multi-step loop so the two
+    cannot disagree about when a decode is finished. Returns the best text it
+    reached, which is the input itself when nothing further could be peeled.
+    """
+    current = text
+    for _ in range(rounds):
+        if _decoded_confidence(current) >= MULTI_STEP_DONE_THRESHOLD:
+            return current
+        family = first_layer_family(current)
+        peeled = (
+            _decode_single_layer(current, family)
+            if family is not None
+            else _best_letters_layer(current)
+        )
+        if peeled is None or peeled == current:
+            return current
+        current = peeled
+    return current
+
+
 class DeterministicCanonicalizer:
     """Recovers the plaintext instruction a detected transformation wrapped.
 
@@ -305,6 +335,16 @@ class DeterministicCanonicalizer:
         decoded = _decode_single_layer(text, detection.family)
         if decoded is None:
             return ()
+        # Peeling one layer is not the same as finishing. A layered payload
+        # whose wrapper does not announce itself shows only its outer
+        # signature, so `detect` names a single family in good faith and the
+        # inner layer survives -- every difficulty-3 multi-step case failed
+        # this way, returning still-encoded text as though it were the
+        # answer. Continue from what the first peel produced, on the same
+        # terms the multi-step loop uses, and stop as soon as the text reads
+        # as language.
+        if _decoded_confidence(decoded) < MULTI_STEP_DONE_THRESHOLD:
+            decoded = _peel_remaining_layers(decoded)
         return (self._view(decoded, detection.family.value),)
 
     def _canonicalize_multi_step(self, text: str) -> tuple[CanonicalView, ...]:
@@ -323,15 +363,15 @@ class DeterministicCanonicalizer:
         current = text
         rounds_decoded = 0
         for _ in range(MAX_MULTI_STEP_ROUNDS):
-            layer_family = first_layer_family(current)
-            layer = (
-                _decode_single_layer(current, layer_family)
-                if layer_family is not None
+            family = first_layer_family(current)
+            peeled = (
+                _decode_single_layer(current, family)
+                if family is not None
                 else _best_letters_layer(current)
             )
-            if layer is None:
+            if peeled is None or peeled == current:
                 break
-            current = layer
+            current = peeled
             rounds_decoded += 1
             if _decoded_confidence(current) >= MULTI_STEP_DONE_THRESHOLD:
                 break
