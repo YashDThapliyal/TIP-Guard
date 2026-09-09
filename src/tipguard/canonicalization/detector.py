@@ -875,14 +875,23 @@ def _scan_families(text: str) -> _FamilyScan:
         evidence.append("morse_run")
         remaining = _consume(remaining, morse_match.group(0))
 
+    # Substitution is tested before the letter-only families, and ordered
+    # ahead of them, because its glyphs are visible on the surface while a
+    # caesar shift or a reversal is not. In a layered payload the visible
+    # transformation is the outer one, so it is what a decode must peel
+    # first. Taking the letters guess first decoded the inner layer against
+    # still-substituted text and produced near-miss gibberish -- "tiis is
+    # vsheot" for "this is urgent" -- which is worse than not decoding, since
+    # it looks almost right.
+    substituted = has_substitution_density(remaining)
+    if substituted:
+        distinct.append(Family.SUBSTITUTION)
+        evidence.append("substitution_density")
+
     letters = _resolve_letters_family(remaining)
     if letters is not None:
         distinct.append(letters.family)
         evidence.append(_LETTERS_EVIDENCE[letters.family])
-
-    if has_substitution_density(remaining):
-        distinct.append(Family.SUBSTITUTION)
-        evidence.append("substitution_density")
 
     implies_code = code_payload is not None
     unique = list(dict.fromkeys(distinct))

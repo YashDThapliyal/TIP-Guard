@@ -87,6 +87,10 @@ MAX_MULTI_STEP_ROUNDS = 3
 #: which a multi-step round is judged to have reached plain English, so
 #: further rounds are skipped rather than degrading a good decode by trying
 #: to peel a layer that is not there.
+#: Fewest alphabetic tokens a decode must leave before its stoplist hit rate
+#: is worth reading. Matches the detector's own floor for the same reason.
+MIN_CONFIDENCE_TOKENS = 4
+
 MULTI_STEP_DONE_THRESHOLD = CONFIDENT_HIT_THRESHOLD + 0.05
 
 
@@ -225,7 +229,16 @@ def _decoded_confidence(text: str) -> float:
     score low, so this doubles as a soundness check a caller can threshold
     on without re-deriving one.
     """
-    return _hit_rate(_alpha_tokens(text))
+    tokens = _alpha_tokens(text)
+    # A hit rate over one or two tokens says nothing. Symbol-substituted text
+    # leaves almost no purely-alphabetic tokens standing, and the few it does
+    # are short fragments -- a stray "i" scored such a payload at 0.50, above
+    # the multi-step "done" threshold, so the loop stopped a layer early and
+    # returned still-encoded text as though it were the answer. Below the
+    # sample floor the honest answer is no confidence at all.
+    if len(tokens) < MIN_CONFIDENCE_TOKENS:
+        return 0.0
+    return _hit_rate(tokens)
 
 
 #: The letter-only families, tried blind when the scan cannot name a layer.
