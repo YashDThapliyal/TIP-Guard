@@ -48,20 +48,6 @@ SUBSTITUTION_SYMBOLS = "@€!°$+#%&*"
 #: benchmark's, which catches drift without creating the coupling.
 SUBSTITUTION_ALPHABET = "013457@€!°$+"
 
-#: Shortest all-glyph token that can be read as a substituted word at all.
-#: Three would swallow "555" and "240"; four is past the common short numbers
-#: while still catching a five-letter word substituted end to end.
-MIN_GLYPH_WORD = 4
-
-#: The glyphs that are digits. A token built only from these is a number as
-#: readily as it is a substituted word -- "4557" is a ticket number and a
-#: substitution of "asst", "45537" is a five-digit identifier and a
-#: substitution of "asset" -- so no character-class rule can separate them.
-#: An all-glyph token therefore has to carry at least one symbol glyph, which
-#: no ordinary identifier does, before it counts as a substituted word. See
-#: `_is_glyph_word` for what that concedes.
-SUBSTITUTION_DIGITS = "013457"
-
 #: Window and threshold for the substitution-density test: within any run of
 #: twelve consecutive word-position characters, at least a quarter must be
 #: digits or symbols. Twelve is about two English words, short enough to see
@@ -110,67 +96,65 @@ def _is_word_position(char: str) -> bool:
     return char.isalnum() or char in SUBSTITUTION_SYMBOLS
 
 
-def _strip_edges(token: str) -> str:
-    """`token` without its leading and trailing non-word-position characters.
-
-    `str.strip(string.punctuation)` cannot be used here: half the substitution
-    glyphs (`@ $ + ! %`) are themselves punctuation, and stripping them would
-    destroy the tokens this exists to preserve. Word positions are kept and
-    everything else at the edges goes, so "45537," and "(45537)" are tested as
-    "45537" while "+h!$" is left exactly as it is. Without this, a fully
-    substituted word stopped being recognised the moment a sentence put a
-    comma after it.
-    """
-    start, end = 0, len(token)
-    while start < end and not _is_word_position(token[start]):
-        start += 1
-    while end > start and not _is_word_position(token[end - 1]):
-        end -= 1
-    return token[start:end]
-
-
-def _is_glyph_word(token: str) -> bool:
-    """True for a token that can only be read as a word spelled in glyphs.
-
-    Long enough to be a word, made only of glyphs, and carrying a symbol glyph
-    somewhere other than its first or last character. The symbol requirement
-    keeps ordinary identifiers out: a ticket number, a lot number, a zip code,
-    a card number and an extension are all digits, so none of them reach this.
-    Requiring the symbol to be interior handles the half of the glyph set that
-    is also punctuation -- a trailing "!" on "4557!" is an exclamation mark,
-    not a substituted letter, and `_strip_edges` cannot remove it without
-    destroying payloads like "+h!$" that legitimately end in one.
-
-    What it concedes, deliberately: a payload substituted entirely into
-    digits -- "45537" for "asset" -- is not recognised. That is not an
-    oversight but the honest end of a character-class rule. "45537" and the
-    ticket number "4557" have the same shape, and every rule tried against
-    them traded one error for the other: keying on token length flagged zip
-    codes and order numbers, and keying on how many all-glyph tokens the text
-    held flagged comma-separated serial lists while letting a payload escape
-    behind seven words of wrapper. Separating them needs a dictionary check on
-    the de-leeted token, which is semantic work and belongs to the
-    canonicalizer this baseline exists to be compared against -- so the miss
-    is recorded here and pinned by a test rather than papered over.
-    """
-    return (
-        len(token) >= MIN_GLYPH_WORD
-        and all(char in SUBSTITUTION_ALPHABET for char in token)
-        and any(char not in SUBSTITUTION_DIGITS for char in token[1:-1])
-    )
-
-
 def _obfuscated(tokens: list[str]) -> list[bool]:
-    """Which tokens may carry replaced letters.
+    """Which tokens may carry replaced letters: those that kept a letter.
 
-    A token keeping at least one letter qualifies: leetspeak beside a
-    surviving letter is unambiguous. A token that kept no letter qualifies
-    only on `_is_glyph_word`'s terms. Both tests are local to the token, so a
-    payload is seen the same whether it stands alone or sits inside a long
-    ordinary wrapper -- which is how the benchmark presents it, and what
-    `_has_substitution_density` promises.
+    Leetspeak beside a surviving letter is unambiguous, so a token holding any
+    letter is judged on its glyphs. A token that kept no letter is not judged
+    at all, and that is a deliberate limit rather than an omission.
+
+    Four rounds of review tried to read those tokens, and each rule bought a
+    fresh class of false positive while changing the verdict on none of the
+    1,700 benchmark cases. Reading any long glyph-only token flagged four-digit
+    ticket numbers. Requiring glyph-only tokens to be a share of the text moved
+    that onto short sentences and onto comma-separated serial lists, and lost a
+    payload behind seven words of wrapper. Requiring an interior symbol glyph
+    cleared those and then flagged unspaced arithmetic ("10+5"), bearings
+    ("45°30"), unit-at-price notation ("10@45") and runs of exclamation marks.
+
+    The pattern underneath is not bad luck. A token with no letters left has
+    only its character classes to go on, and ordinary writing is full of digit
+    and symbol clusters that a substitution table could equally have produced.
+    "45537" is "asset" in leet digits and a five-digit identifier; the two are
+    the same string. Separating them needs a dictionary check on the de-leeted
+    token, which is semantic work -- exactly the work this syntactic baseline
+    exists to be compared against.
+
+    So the miss is recorded and pinned by a test rather than patched. A word
+    substituted end to end escapes this classifier. That is a property of
+    conventional filtering and part of what the study is measuring, and hiding
+    it behind a rule that fires on arithmetic would overstate the baseline.
     """
-    return [any(char.isalpha() for char in token) or _is_glyph_word(token) for token in tokens]
+    return [any(char.isalpha() for char in token) for token in tokens]
+
+
+def _trim_emphasis(token: str) -> str:
+    """`token` without a trailing run of two or more identical symbol glyphs.
+
+    Half the substitution glyphs are also punctuation, so "stop!!!!" reads as
+    four replaced letters unless emphasis is taken out first. A doubled symbol
+    at the end of a word is punctuation in every text this project sees; a
+    substitution puts its glyphs where the letters were, which is inside the
+    word ("n€€d$" keeps its doubled glyph and is untouched here) or as a
+    single trailing character ("+h!$"), never as a repeated run tacked on.
+
+    Ordinary punctuation is peeled off as the run is, and the two alternate
+    until neither applies: emphasis usually arrives wearing a comma, a full
+    stop or a closing bracket, so looking only at the final character missed
+    every "stop!!!!," and "(Great!!!)" in a sentence. Characters that hold a
+    letter's place are never peeled, so a single trailing glyph survives.
+    """
+    end = len(token)
+    while True:
+        while end > 0 and not _is_word_position(token[end - 1]):
+            end -= 1
+        if not (
+            end >= 2 and token[end - 1] in SUBSTITUTION_SYMBOLS and token[end - 1] == token[end - 2]
+        ):
+            return token[:end]
+        char = token[end - 1]
+        while end > 0 and token[end - 1] == char:
+            end -= 1
 
 
 def _replacement_flags(text: str) -> list[int]:
@@ -190,7 +174,7 @@ def _replacement_flags(text: str) -> list[int]:
     accident on ordinary traffic while the evasion has to be constructed. It
     is pinned by a test rather than left to be rediscovered.
     """
-    tokens = [_strip_edges(token) for token in text.split()]
+    tokens = [_trim_emphasis(token) for token in text.split()]
     flags: list[int] = []
     for token, obfuscated in zip(tokens, _obfuscated(tokens), strict=True):
         flags.extend(
