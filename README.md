@@ -119,7 +119,8 @@ git-ignored):
   Creating it is the atomic claim, which is what stops two runs that drew the same generated id
   (the timestamp has one-second resolution) from writing over each other.
 
-Together those two decide what reusing a `--run-id` does. `evaluate` refuses a directory that is
+Both live in `src/tipguard/evaluation/run_dir.py`, and together they decide what reusing a
+`--run-id` does. `evaluate` refuses a directory that is
 marked complete, one that another run appears to hold, and one holding all three artifacts with
 no marker — that last is how a run finished before markers existed looks, and it says to delete
 the directory or choose another id. Only a directory with no marker, no owner and an incomplete
