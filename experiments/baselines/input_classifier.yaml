@@ -1,0 +1,12 @@
+# Baseline arm: input_classifier. Mock models so the whole suite runs offline and in CI;
+# real-model variants are selected by the experiments plan (Phases 6-7).
+name: baseline-input_classifier
+seed: 0
+dataset: data/generated/tipguard-v1.jsonl
+main_model: mock-main
+defense:
+  name: input_classifier
+  params:
+    classifier_model: mock-judge
+output_dir: reports/runs
+cache_dir: .tipguard-cache

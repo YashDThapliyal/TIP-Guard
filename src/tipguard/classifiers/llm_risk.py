@@ -21,7 +21,7 @@ from tipguard.classifiers.prompts import (
     format_policies_summary,
     risk_user_prompt,
 )
-from tipguard.classifiers.types import RiskScore
+from tipguard.classifiers.types import PARSER_FAILURE_CATEGORY, RiskScore
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
 from tipguard.models.json_utils import iter_json_objects
@@ -31,7 +31,6 @@ from tipguard.models.types import ModelProvider, ModelRequest, ModelResponse
 #: validation, is scored with. Not a `RiskCategory` member: it names a
 #: property of the *classifier's own output*, not of the prompt, so it does
 #: not belong in the enum that describes what a prompt can be about.
-PARSER_FAILURE_CATEGORY = "parser_failure"
 
 #: How much of `RiskScore.evidence` survives, on both the success and the
 #: parser-failure path. Enough to debug a broken prompt or a misbehaving

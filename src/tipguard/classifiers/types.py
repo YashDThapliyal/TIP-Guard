@@ -41,6 +41,17 @@ class RiskCategory(StrEnum):
     NONE = "none"
 
 
+#: The category a classifier reports when it could not produce a judgement
+#: at all -- an unparseable or off-contract model reply. It is not a low
+#: score: a classifier that failed scores 0.0, the safest value it can
+#: report, so a guard reading only the number would treat a model that did
+#: not answer as one that answered "safe". Guards must branch on this
+#: category before comparing against a threshold. Defined here, beside the
+#: protocol, because any classifier may report it and any guard must handle
+#: it -- not in the one implementation that happens to raise it today.
+PARSER_FAILURE_CATEGORY = "parser_failure"
+
+
 class RiskScore(FrozenModel):
     """One classifier's verdict on one prompt.
 
