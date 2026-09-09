@@ -1,3 +1,7 @@
+import re
+
+import pytest
+
 from tipguard.models.mock import MockProvider, MockRule
 from tipguard.models.types import Message, ModelRequest
 
@@ -29,3 +33,15 @@ def test_mock_default_text() -> None:
         MockProvider(default="I cannot help.").complete(ModelRequest.simple("x")).text
         == "I cannot help."
     )
+
+
+def test_mock_rule_rejects_an_invalid_pattern_at_construction() -> None:
+    # A bad pattern must fail where the rule is written, not on the first
+    # prompt that happens to reach the provider mid-run.
+    with pytest.raises(re.error):
+        MockRule("(unclosed", "never")
+
+
+def test_mock_rule_compares_by_pattern_and_response_only() -> None:
+    assert MockRule("a", "b") == MockRule("a", "b")
+    assert MockRule("a", "b") != MockRule("a", "c")

@@ -2,15 +2,29 @@
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from tipguard.models.types import ModelRequest, ModelResponse
 
 
 @dataclass(frozen=True)
 class MockRule:
+    """A pattern to match against the last user message, and its reply.
+
+    The pattern is compiled once, at construction, so an invalid regex is a
+    `re.error` where the rule is written rather than on whichever prompt
+    first reaches the provider — this project's tests and offline runs are
+    mock-heavy, and re-compiling per prompt also re-paid the cost on every
+    call. `regex` is excluded from equality and repr so two rules still
+    compare by what they say.
+    """
+
     pattern: str
     response: str
+    regex: re.Pattern[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "regex", re.compile(self.pattern, re.IGNORECASE))
 
 
 def _token_count(text: str) -> int:
@@ -32,7 +46,7 @@ class MockProvider:
 
     def _respond_to(self, user_text: str) -> str:
         for rule in self._rules:
-            if re.search(rule.pattern, user_text, flags=re.IGNORECASE):
+            if rule.regex.search(user_text):
                 return rule.response
         return self._default if self._default is not None else f"ECHO: {user_text}"
 
