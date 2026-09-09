@@ -34,9 +34,13 @@ every configured protected value with a placeholder before a line is written. Th
 case-insensitive but not normalised, so a spaced or punctuated variant can survive redaction —
 unlike the leak detector, which squashes punctuation and whitespace before comparing and does
 catch such a variant. Redaction is installed two ways: the CLI calls `configure_logging`, which
-puts a redacting formatter on the whole `tipguard` logger tree, and `run_experiment` additionally
-scopes a redacting filter to its own logger, so a library caller that never configures logging
-still gets redacted records in its own handlers. Result files under `reports/runs/` may contain
+puts a redacting formatter on the `tipguard` logger's handler, and every logger `get_logger`
+returns carries a redacting filter that is live for the duration of a `redacting` block, which
+`run_experiment` opens around every run. The filter sits on each emitting logger rather than on
+the `tipguard` package logger because a logger's filters are not consulted for records
+propagating up from a descendant; on the package logger it would miss `tipguard.models`, whose
+provider-failure debug line is the one record documented as able to quote a request body. So a
+library caller that never configures logging still gets redacted records in its own handlers. Result files under `reports/runs/` may contain
 raw model output, so that directory is git-ignored and is never committed or attached to an issue.
 When a request is blocked, the stored `response_text` is the refusal only, so blocked cases never
 persist a reconstructed secret. Dashboards and reports display decisions and reasons, not

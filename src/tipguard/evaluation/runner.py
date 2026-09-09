@@ -186,8 +186,10 @@ def run_experiment(
     process-wide state, and a library facade such as `ProtectedModel` calls
     this on behalf of an application that has already made those choices;
     the CLI owns `configure_logging` instead. What the runner still owes its
-    caller is that its own records carry no protected value, so it scopes a
-    redacting filter to its logger for the duration of the run. Pass
+    caller is that no TIP-Guard record carries a protected value, so it turns
+    on redaction for every `tipguard.*` logger for the duration of the run —
+    including `tipguard.models`, whose provider-failure debug line can quote
+    an SDK message carrying the system prompt. Pass
     `protected_values` to redact against something other than the policies
     file `config` names — by default that file's values are used, so a
     caller that does nothing still gets redaction.
@@ -198,7 +200,7 @@ def run_experiment(
     models = load_yaml_model(config.models_config, ModelsConfig)
     _ensure_model_alias(config, models)
     protected = _policy_values(policies) if protected_values is None else tuple(protected_values)
-    with redacting(log, protected):
+    with redacting(protected):
         return _run_evaluated(config, config_path, models, policies, run_id, now)
 
 

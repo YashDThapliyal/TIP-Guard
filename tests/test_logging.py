@@ -83,31 +83,63 @@ def test_logger_redacts_values_serialized_by_the_json_default_hook(capsys) -> No
     logging.getLogger("tipguard").handlers.clear()
 
 
-def test_redacting_scopes_a_filter_to_one_logger() -> None:
-    log = logging.getLogger("tipguard.scoped-test")
-    with redacting(log, ["SECRET-1"]):
-        assert len(log.filters) == 1
-    assert log.filters == []
+def test_get_logger_attaches_one_redacting_filter() -> None:
+    log = get_logger("filter-once")
+    get_logger("filter-once")
+    assert len(log.filters) == 1
 
 
-def test_redacting_with_no_values_adds_no_filter() -> None:
-    log = logging.getLogger("tipguard.scoped-empty")
-    with redacting(log, []):
-        assert log.filters == []
+def test_redacting_is_inert_outside_a_block() -> None:
+    log = get_logger("inert")
+    captured = _capture(log)
+    log.info("SECRET-1 stays", extra={"note": "SECRET-1"})
+    assert captured[0].note == "SECRET-1"  # type: ignore[attr-defined]
 
 
 def test_redacting_hides_values_from_message_args_and_extras() -> None:
-    log = logging.getLogger("tipguard.scoped-capture")
-    log.setLevel(logging.INFO)
+    log = get_logger("scoped-capture")
+    captured = _capture(log)
+    with redacting(["SECRET-1"]):
+        log.info("saw SECRET-1 in %s", "a SECRET-1 body", extra={"note": "SECRET-1 here"})
+    assert "SECRET-1" not in captured[0].getMessage()
+    assert captured[0].note == "[REDACTED] here"  # type: ignore[attr-defined]
+
+
+def test_redacting_covers_a_sibling_logger_not_only_the_caller_s() -> None:
+    # A filter on the `tipguard` package logger would miss this: a logger's
+    # filters are not consulted for records propagating from a descendant,
+    # and `tipguard.models` is where the provider-failure text is emitted.
+    sibling = get_logger("some-other-module")
+    captured = _capture(sibling)
+    with redacting(["SECRET-1"]):
+        sibling.info("upstream said SECRET-1")
+    assert "SECRET-1" not in captured[0].getMessage()
+
+
+def test_redacting_blocks_nest_and_each_undoes_only_itself() -> None:
+    log = get_logger("nested")
+    captured = _capture(log)
+    with redacting(["SECRET-1"]):
+        with redacting(["SECRET-2"]):
+            log.info("SECRET-1 and SECRET-2")
+        log.info("SECRET-1 and SECRET-2")
+    assert captured[0].getMessage() == "[REDACTED] and [REDACTED]"
+    assert captured[1].getMessage() == "[REDACTED] and SECRET-2"
+
+
+def test_redacting_with_no_values_is_a_no_op() -> None:
+    log = get_logger("empty-values")
+    captured = _capture(log)
+    with redacting([]):
+        log.info("SECRET-1")
+    assert captured[0].getMessage() == "SECRET-1"
+
+
+def _capture(log: logging.Logger) -> list[logging.LogRecord]:
+    """Collect records emitted on `log`, restoring its state after the test."""
     captured: list[logging.LogRecord] = []
     handler = logging.Handler()
     handler.emit = captured.append  # type: ignore[method-assign]
     log.addHandler(handler)
-    try:
-        with redacting(log, ["SECRET-1"]):
-            log.info("saw SECRET-1 in %s", "a SECRET-1 body", extra={"note": "SECRET-1 here"})
-    finally:
-        log.removeHandler(handler)
-    record = captured[0]
-    assert "SECRET-1" not in record.getMessage()
-    assert record.note == "[REDACTED] here"  # type: ignore[attr-defined]
+    log.setLevel(logging.INFO)
+    return captured

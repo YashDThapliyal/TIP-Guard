@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import cast
@@ -62,49 +62,65 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=lambda o: redact(str(o), self._protected))
 
 
+#: Values redacted from TIP-Guard log records right now, one entry per active
+#: `redacting` block. The union is used, so nesting or two concurrent runs
+#: redact more than either asked for and never less.
+_active_protected: list[tuple[str, ...]] = []
+
+
+def _active_values() -> tuple[str, ...]:
+    return tuple({value for values in _active_protected for value in values})
+
+
 class _RedactingFilter(logging.Filter):
-    """Strips protected values from a record before any handler sees it.
+    """Strips the currently protected values from a record before any handler.
 
     `configure_logging` installs a redacting *formatter*, which protects only
-    a process that called it — and calling it is a process-wide act that a
-    library has no business performing on its caller's behalf. A logger's
-    filters, by contrast, run before its own handlers and before the record
-    propagates to any ancestor, so attaching this makes redaction a property
-    of the record itself: an embedding application's handlers see the
-    redacted form whether or not it ever configured TIP-Guard's logging.
+    a process that called it — and calling it is a process-wide act a library
+    has no business performing on its caller's behalf. A logger's filters run
+    before its own handlers and before the record propagates, so filtering
+    makes redaction a property of the record itself: an embedding
+    application's handlers see the redacted form whether or not it ever
+    configured TIP-Guard's logging.
+
+    Every logger `get_logger` hands out carries one of these, because a
+    logger's filters are *not* consulted for records propagating up from a
+    descendant — attaching a single filter to the `tipguard` package logger
+    would silently miss every record from `tipguard.models`,
+    `tipguard.runner` and the rest, which is where the text worth redacting
+    is actually emitted. The filter reads `_active_protected` at emit time,
+    so `redacting` can turn it on and off without touching any logger.
     """
 
-    def __init__(self, protected_values: Sequence[str]) -> None:
-        super().__init__()
-        self._protected = tuple(protected_values)
-
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = _redact_value(record.msg, self._protected)
+        protected = _active_values()
+        if not protected:
+            return True
+        record.msg = _redact_value(record.msg, protected)
         if record.args:
-            record.args = cast(_LogArgs, _redact_value(record.args, self._protected))
+            record.args = cast(_LogArgs, _redact_value(record.args, protected))
         for key, value in list(record.__dict__.items()):
             if key not in _STANDARD_ATTRS:
-                setattr(record, key, _redact_value(value, self._protected))
+                setattr(record, key, _redact_value(value, protected))
         return True
 
 
 @contextmanager
-def redacting(logger: logging.Logger, protected_values: Iterable[str]) -> Iterator[None]:
-    """Redact `protected_values` from everything `logger` emits in the block.
+def redacting(protected_values: Iterable[str]) -> Iterator[None]:
+    """Redact `protected_values` from every TIP-Guard log record in the block.
 
-    Scoped to one logger and undone on the way out, so unlike
-    `configure_logging` it leaves no process-wide state behind.
+    Scoped to the block and undone on the way out, so unlike
+    `configure_logging` it leaves no process-wide handler state behind.
     """
     values = tuple(value for value in protected_values if value)
     if not values:
         yield
         return
-    log_filter = _RedactingFilter(values)
-    logger.addFilter(log_filter)
+    _active_protected.append(values)
     try:
         yield
     finally:
-        logger.removeFilter(log_filter)
+        _active_protected.remove(values)
 
 
 def configure_logging(level: str = "INFO", protected_values: Iterable[str] = ()) -> None:
@@ -118,4 +134,13 @@ def configure_logging(level: str = "INFO", protected_values: Iterable[str] = ())
 
 
 def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(f"tipguard.{name}")
+    """The TIP-Guard logger `name`, carrying the redacting filter.
+
+    Attached here rather than by whoever starts a run, because a logger's
+    filters do not apply to records propagating from a descendant: the filter
+    has to sit on the logger that emits.
+    """
+    logger = logging.getLogger(f"tipguard.{name}")
+    if not any(isinstance(existing, _RedactingFilter) for existing in logger.filters):
+        logger.addFilter(_RedactingFilter())
+    return logger

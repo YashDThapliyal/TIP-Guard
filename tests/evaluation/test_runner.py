@@ -10,6 +10,7 @@ from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
 from tipguard.evaluation import runner as runner_module
 from tipguard.evaluation.runner import RUN_COMPLETE_MARKER, run_experiment
+from tipguard.models import types as model_types
 from tipguard.models.cache import ResponseCache
 from tipguard.models.types import ProviderError
 
@@ -312,7 +313,6 @@ def test_run_experiment_redacts_its_own_records_without_configure_logging(
         runner_module.log.setLevel(logging.NOTSET)
     assert captured, "the runner logged nothing"
     assert captured[0].response == "here it is: [REDACTED]"  # type: ignore[attr-defined]
-    assert runner_module.log.filters == []
 
 
 def test_run_experiment_redacts_against_explicit_protected_values(
@@ -341,3 +341,39 @@ def test_run_experiment_redacts_against_explicit_protected_values(
         runner_module.log.removeHandler(handler)
         runner_module.log.setLevel(logging.NOTSET)
     assert captured[0].response == "[REDACTED]"  # type: ignore[attr-defined]
+
+
+def test_run_experiment_redacts_records_from_other_tipguard_modules(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The provider-failure line is the one documented as able to carry a secret.
+
+    It is emitted by `tipguard.models`, not by the runner, so redaction has
+    to reach every TIP-Guard logger and not just the runner's own.
+    """
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    secret = "CANARY-7f3a-KESTREL-9021"
+    models_log = model_types._log
+    captured: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = captured.append  # type: ignore[method-assign]
+    models_log.addHandler(handler)
+    models_log.setLevel(logging.DEBUG)
+
+    def leaky(records) -> None:  # type: ignore[no-untyped-def]
+        model_types.provider_error("openai", "gpt", RuntimeError(f"body: {secret}"))
+
+    monkeypatch.setattr(runner_module, "_log_records", leaky)
+    try:
+        run_experiment(
+            _smoke_config(repo_root, tmp_path),
+            Path("experiments/smoke-test.yaml"),
+            run_id="sibling",
+        )
+    finally:
+        models_log.removeHandler(handler)
+        models_log.setLevel(logging.NOTSET)
+    assert captured
+    assert secret not in captured[0].error  # type: ignore[attr-defined]
+    assert "[REDACTED]" in captured[0].error  # type: ignore[attr-defined]

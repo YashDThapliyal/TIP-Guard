@@ -80,8 +80,11 @@ def provider_error(name: str, model: str, exc: Exception) -> ProviderError:
     Upstream exception strings can quote the request body — which carries the
     protected values from the system prompt — and are echoed by the CLI, so the
     raised message carries only the exception type and, when present, the HTTP
-    status. The full text goes to the debug log, which is redacted by
-    `_JsonFormatter`.
+    status. The full text goes to the debug log, which is redacted twice over:
+    by `_JsonFormatter` when the CLI has called `configure_logging`, and by
+    this logger's own redacting filter for the duration of any `redacting`
+    block — which `run_experiment` opens around every run, so a library caller
+    that configures nothing still never sees this text in the clear.
     """
     _log.debug(
         "provider_call_failed",
