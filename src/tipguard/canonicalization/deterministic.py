@@ -25,7 +25,7 @@ records `params["ambiguous"] == "true"` for a substitution case, a decode
 that does not match `canonical_intent` is that case being genuinely
 unrecoverable, not this canonicalizer being wrong, and must be scored as
 `ErrorCategory.AMBIGUOUS` rather than `ErrorCategory.INCORRECT`. See
-`tests/canonicalization/test_on_corpus.py::_error_category`.
+`tests/canonicalization/test_on_corpus.py::_is_ambiguous_substitution`.
 
 **What a caller gets back.** `canonicalize` returns a `tuple[CanonicalView,
 ...]` -- never a full `Canonicalization` -- because this is one canonicalizer

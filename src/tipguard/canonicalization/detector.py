@@ -869,14 +869,21 @@ def _detect_riddle_or_indirect(text: str) -> tuple[Family | None, str | None]:
         return Family.RIDDLE, "what_am_i"
     if THE_THING_THAT.search(text):
         return Family.RIDDLE, "the_thing_that"
-    if "?" in text:
-        # The weakest of the four tells, and the one most likely to be a
-        # false positive on an ordinary question -- see the module
-        # docstring. Kept because it is the only signal harder riddle and
-        # indirect-description cases leave once their lexical tells are
-        # dropped, and it only runs once every other check above, and every
-        # encoding check in `detect`, has already failed.
-        return Family.RIDDLE, "question_mark"
+    # A bare "?" was tried as a fifth tell and removed. It is what a question
+    # looks like, not what a riddle looks like, so it flagged half of every
+    # hard negative in the corpus -- 84 of 180 -- and a sixth of the plain
+    # direct requests, to buy 40 riddle and indirect cases. Measured over the
+    # whole corpus: dropping it takes hard-negative false positives from
+    # 0.500 to 0.033 and direct from 0.167 to 0.000, and costs 0.035 of
+    # attack detection.
+    #
+    # That trade is the study's own subject rather than a tuning preference.
+    # A defence that fires on half of the hard negatives -- prompts written
+    # to look suspicious while being harmless -- has stopped measuring intent
+    # and started measuring surface form, which is exactly what the
+    # conventional baselines do and what this component exists to beat. The
+    # riddle and indirect cases it gave up are the ones a syntactic rule
+    # cannot reach; Task 6's LLM canonicalizer is what should reach them.
     return None, None
 
 

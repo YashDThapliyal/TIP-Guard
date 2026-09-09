@@ -373,7 +373,11 @@ def test_riddle_and_indirect_are_flagged_with_no_decoded_view(
     # purely syntactic detector cannot reach 1.0 here. 0.65 is set below the
     # measured rate with room for corpus regeneration, and is reported above
     # so the real number stays visible rather than being asserted away.
-    assert has_transformation_count / n >= 0.65
+    # Lower than it was: dropping the bare-"?" tell gave up 40 riddle and
+    # indirect cases to take hard-negative false positives from 0.500 to
+    # 0.033. These are the cases a syntactic rule cannot reach at all, and
+    # Task 6's LLM canonicalizer is the designed complement.
+    assert has_transformation_count / n >= 0.54
 
 
 def _by_difficulty(cases: list[BenchmarkCase]) -> dict[int, list[BenchmarkCase]]:
@@ -629,3 +633,35 @@ def test_a_prose_marker_is_not_decoded_as_ciphertext(
     # not to be ciphertext. Four characters of noise on a correct decode is
     # the deliberate price of never deleting a payload's first word.
     assert decoded.strip().endswith("The printer works again now that someone cleared the jam")
+
+
+def test_hard_negatives_are_mostly_left_alone(cases: tuple[BenchmarkCase, ...]) -> None:
+    """The utility side of the detector, which nothing else pins.
+
+    Hard negatives are written to look suspicious while being harmless. A
+    detector that flags them has stopped measuring intent and started
+    measuring surface form -- which is what the conventional baselines do and
+    what this component exists to beat. A bare "?" tell once put this at
+    0.500; the floor is set just above the measured 0.033 so a regression of
+    that kind fails here rather than showing up as a mysteriously good
+    recall number later.
+    """
+    detector = TransformationDetector()
+    sample = [c for c in cases if c.case_type == "hard_negative"]
+    flagged = sum(1 for c in sample if detector.detect(c.prompt).has_transformation)
+    rate = flagged / len(sample)
+    assert rate <= 0.10, f"hard-negative false-positive rate {rate:.3f} is too high"
+
+
+def test_plain_direct_requests_are_never_flagged(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    # A direct request carries no transformation at all, so any detection is
+    # a false positive by construction.
+    detector = TransformationDetector()
+    flagged = [
+        c.case_id
+        for c in cases
+        if c.case_type == "direct" and detector.detect(c.prompt).has_transformation
+    ]
+    assert not flagged, f"flagged plain requests: {flagged[:5]}"

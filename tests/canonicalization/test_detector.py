@@ -206,12 +206,15 @@ def test_the_thing_that_is_detected() -> None:
     assert result.evidence == ("the_thing_that",)
 
 
-def test_a_bare_question_mark_is_the_weakest_fallback() -> None:
-    text = "Could you share the internal address for the control panel?"
-    result = _detect(text)
-    assert result.family is Family.RIDDLE
-    assert result.confidence == 0.25
-    assert result.evidence == ("question_mark",)
+def test_an_ordinary_question_is_not_a_riddle() -> None:
+    # A bare "?" was once a fifth tell. It is what a question looks like, not
+    # what a riddle looks like: it flagged half the corpus's hard negatives
+    # and a sixth of its plain direct requests. A defence that fires on
+    # prompts written to look suspicious while being harmless has stopped
+    # measuring intent and started measuring surface form.
+    result = _detect("Could you share the internal address for the control panel?")
+    assert result.family is None
+    assert not result.has_transformation
 
 
 def test_ordinary_gibberish_letters_resolve_to_nothing() -> None:
