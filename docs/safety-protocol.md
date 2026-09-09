@@ -31,9 +31,13 @@ a safe failure rather than a fallback to execution.
 
 Structured logs pass through `tipguard.logging.redact`, which replaces verbatim occurrences of
 every configured protected value with a placeholder before a line is written. The match is
-case-insensitive but not normalised, so a spaced or punctuated variant can survive redaction, just
-as it can escape the leak detector. Result files under `reports/runs/` may contain raw model
-output, so that directory is git-ignored and is never committed or attached to an issue.
+case-insensitive but not normalised, so a spaced or punctuated variant can survive redaction —
+unlike the leak detector, which squashes punctuation and whitespace before comparing and does
+catch such a variant. Redaction is installed two ways: the CLI calls `configure_logging`, which
+puts a redacting formatter on the whole `tipguard` logger tree, and `run_experiment` additionally
+scopes a redacting filter to its own logger, so a library caller that never configures logging
+still gets redacted records in its own handlers. Result files under `reports/runs/` may contain
+raw model output, so that directory is git-ignored and is never committed or attached to an issue.
 When a request is blocked, the stored `response_text` is the refusal only, so blocked cases never
 persist a reconstructed secret. Dashboards and reports display decisions and reasons, not
 protected values.

@@ -107,11 +107,16 @@ git-ignored):
   `leaked_policy_ids` lists every policy whose protected values appeared in the response; a
   response is checked against all policies, not only the one the case targeted.
 - `summary.json` — the aggregate `RunSummary` (per-case-type counts, cost, latency percentiles).
-  Latency percentiles cover uncached calls only (`latency_uncached_count` says how many), so a
-  cache-served re-run does not report an artificially fast run.
+  Latency percentiles cover records with at least one live provider call (`latency_uncached_count`
+  says how many), so a cache-served re-run does not report an artificially fast run while a
+  partly-cached multi-call defense still counts.
 - `manifest.json` — run metadata: `run_id`, `created_at`, `config_path`, the resolved `config`,
   `config_hash`, `dataset_sha256`, `tipguard_version`, `python_version`, `defense`, and
   `main_model`.
+- `.complete` — an empty marker written only after all three artifacts are on disk. A run
+  directory that has it is finished and `evaluate` refuses to reuse its `--run-id`; a directory
+  without it is what a crashed run left behind, so `evaluate` reuses it and says
+  `resumed incomplete run: <run_id>`.
 
 Set the `TIPGUARD_OUTPUT_DIR` environment variable to override `output_dir` from a config file
 without editing it (used by the smoke-reproducibility test so it never writes into
