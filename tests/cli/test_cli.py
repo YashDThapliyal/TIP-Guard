@@ -434,3 +434,25 @@ def test_dataset_stats_reports_a_missing_dataset(tmp_path, repo_root) -> None:  
     )
     assert result.exit_code == 1
     assert "file not found" in result.stdout
+
+
+def test_evaluate_reports_that_it_resumed_an_incomplete_run(
+    tmp_path, repo_root, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setenv("TIPGUARD_OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "crashed-run").mkdir(parents=True)
+    result = runner.invoke(
+        app,
+        [
+            "evaluate",
+            "--config",
+            "experiments/smoke-test.yaml",
+            "--run-id",
+            "crashed-run",
+            "--limit",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "resumed incomplete run: crashed-run" in result.stdout

@@ -26,9 +26,20 @@ from tipguard.models.registry import ProviderRegistry
 from tipguard.run_id import config_hash, make_run_id
 from tipguard.seeding import seed_everything
 
-__all__ = ["OUTPUT_DIR_ENV", "RunArtifacts", "_answer_correct", "evaluate_case", "run_experiment"]
+__all__ = [
+    "OUTPUT_DIR_ENV",
+    "RUN_COMPLETE_MARKER",
+    "RunArtifacts",
+    "_answer_correct",
+    "evaluate_case",
+    "run_experiment",
+]
 
 OUTPUT_DIR_ENV = "TIPGUARD_OUTPUT_DIR"
+#: Dropped into a run directory once every artifact is on disk. Its
+#: presence is what separates a finished run, which must never be
+#: overwritten, from the wreckage of a crashed one, which is resumable.
+RUN_COMPLETE_MARKER = ".complete"
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MAX_DATASET_ISSUES = 5
 log = get_logger("runner")
@@ -40,6 +51,9 @@ class RunArtifacts:
     run_dir: Path
     summary: RunSummary
     records: tuple[CaseRecord, ...]
+    #: True when the run reused the directory an earlier, crashed run had
+    #: reserved but never completed.
+    resumed: bool = False
 
 
 def _sha256_file(path: Path) -> str:
@@ -70,17 +84,29 @@ def _ensure_run_id_safe(run_id: str) -> None:
         raise ConfigError(f"invalid run id {run_id!r}")
 
 
-def _reserve_run_dir(run_dir: Path) -> None:
-    """Atomically claim run_dir so two concurrent runs with the same id can't
-    both pass a check-then-write race. mkdir(exist_ok=False) is the atomic
-    reservation; a losing concurrent caller sees FileExistsError.
+def _reserve_run_dir(run_dir: Path) -> bool:
+    """Claim run_dir, returning True when a crashed run is being resumed.
+
+    mkdir(exist_ok=False) is the atomic reservation, so two concurrent runs
+    with the same id can't both pass a check-then-write race; the loser sees
+    FileExistsError. An existing directory is a *finished* run only when it
+    carries `RUN_COMPLETE_MARKER`, which `_write_artifacts` drops after the
+    last artifact is written; that one is refused, because overwriting a
+    result the analysis may already have consumed is never what was meant.
+    Without the marker the directory is a partial write from a run that
+    died, so it is resumable and this run overwrites it.
     """
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError as exc:
-        raise ConfigError(
-            f"run directory already exists: {run_dir}; choose another --run-id"
-        ) from exc
+        if not run_dir.is_dir():
+            raise ConfigError(f"run directory path is not a directory: {run_dir}") from exc
+        if (run_dir / RUN_COMPLETE_MARKER).exists():
+            raise ConfigError(
+                f"run directory already exists: {run_dir}; choose another --run-id"
+            ) from exc
+        return True
+    return False
 
 
 def _release_run_dir_if_empty(run_dir: Path) -> None:
@@ -114,6 +140,9 @@ def _write_artifacts(
     (run_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
+    # Last, and only once all three artifacts exist: a marker written any
+    # earlier would declare a half-written run finished.
+    (run_dir / RUN_COMPLETE_MARKER).write_text("", encoding="utf-8")
 
 
 def _build_manifest(
@@ -159,7 +188,9 @@ def run_experiment(
     _ensure_run_id_safe(resolved_run_id)
     output_dir = Path(os.environ.get(OUTPUT_DIR_ENV) or config.output_dir)
     run_dir = output_dir / resolved_run_id
-    _reserve_run_dir(run_dir)
+    resumed = _reserve_run_dir(run_dir)
+    if resumed:
+        log.info("run_resumed", extra={"run_id": resolved_run_id, "run_dir": str(run_dir)})
     try:
         records, summary, manifest = _evaluate_and_build_manifest(
             config, models, policies, cases, config_path, resolved_run_id, now, output_dir
@@ -168,7 +199,7 @@ def run_experiment(
     except Exception:
         _release_run_dir_if_empty(run_dir)
         raise
-    return RunArtifacts(resolved_run_id, run_dir, summary, records)
+    return RunArtifacts(resolved_run_id, run_dir, summary, records, resumed)
 
 
 def _evaluate_and_build_manifest(

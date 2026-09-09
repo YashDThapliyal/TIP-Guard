@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from tipguard.benchmark.schema import CaseType, Decision
-from tipguard.config.loader import load_yaml_model
+from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
 from tipguard.evaluation import runner as runner_module
-from tipguard.evaluation.runner import run_experiment
+from tipguard.evaluation.runner import RUN_COMPLETE_MARKER, run_experiment
 from tipguard.models.cache import ResponseCache
 from tipguard.models.types import ProviderError
 
@@ -186,3 +186,86 @@ def test_clean_response_leaks_no_policy(repo_root: Path) -> None:
 
     assert record.leaked is False
     assert record.leaked_policy_ids == ()
+
+
+def _smoke_config(repo_root: Path, tmp_path: Path) -> ExperimentConfig:
+    config = load_yaml_model(repo_root / "experiments/smoke-test.yaml", ExperimentConfig)
+    return config.model_copy(update={"output_dir": tmp_path, "limit": 1})
+
+
+def test_run_experiment_marks_a_finished_run_complete(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    artifacts = run_experiment(
+        _smoke_config(repo_root, tmp_path), Path("experiments/smoke-test.yaml"), run_id="done-run"
+    )
+    assert not artifacts.resumed
+    assert (artifacts.run_dir / RUN_COMPLETE_MARKER).exists()
+
+
+def test_run_experiment_refuses_a_completed_run_dir(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    config = _smoke_config(repo_root, tmp_path)
+    run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="twice")
+    with pytest.raises(ConfigError, match="already exists"):
+        run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="twice")
+
+
+def test_run_experiment_resumes_a_reserved_dir_without_a_marker(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    run_dir = tmp_path / "crashed"
+    run_dir.mkdir(parents=True)
+    (run_dir / "results.jsonl").write_text("half a run\n", encoding="utf-8")
+    artifacts = run_experiment(
+        _smoke_config(repo_root, tmp_path), Path("experiments/smoke-test.yaml"), run_id="crashed"
+    )
+    assert artifacts.resumed
+    assert artifacts.run_dir == run_dir
+    assert "half a run" not in (run_dir / "results.jsonl").read_text(encoding="utf-8")
+    assert (run_dir / RUN_COMPLETE_MARKER).exists()
+
+
+def test_run_experiment_leaves_no_marker_when_an_artifact_write_fails(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    real_write_text = Path.write_text
+
+    def fail_on_manifest(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self.name == "manifest.json":
+            raise OSError("disk full")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_on_manifest)
+    config = _smoke_config(repo_root, tmp_path)
+    with pytest.raises(OSError, match="disk full"):
+        run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="partial")
+    monkeypatch.undo()
+    run_dir = tmp_path / "partial"
+    assert (run_dir / "results.jsonl").exists()
+    assert not (run_dir / RUN_COMPLETE_MARKER).exists()
+    # The wreckage is resumable rather than a permanent block on the run id.
+    assert run_experiment(config, Path("experiments/smoke-test.yaml"), run_id="partial").resumed
+
+
+def test_run_experiment_rejects_a_run_dir_that_is_a_file(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    (tmp_path / "not-a-dir").write_text("", encoding="utf-8")
+    with pytest.raises(ConfigError, match="not a directory"):
+        run_experiment(
+            _smoke_config(repo_root, tmp_path),
+            Path("experiments/smoke-test.yaml"),
+            run_id="not-a-dir",
+        )

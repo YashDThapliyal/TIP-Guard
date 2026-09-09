@@ -121,6 +121,8 @@ def evaluate(
     except (ConfigError, DatasetError, ProviderError) as exc:
         _echo(str(exc), _experiment_protected_values(config))
         raise typer.Exit(code=1) from exc
+    if artifacts.resumed:
+        typer.echo(f"resumed incomplete run: {artifacts.run_id}")
     typer.echo(f"run: {artifacts.run_dir}")
     typer.echo("type count blocked leaked correct_decision")
     for name, stats in sorted(artifacts.summary.by_type.items()):
