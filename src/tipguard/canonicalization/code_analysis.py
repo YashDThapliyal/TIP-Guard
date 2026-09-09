@@ -40,6 +40,11 @@ MAX_STRING_LENGTH = 10_000
 #: How many AST nodes may be evaluated before the walk gives up.
 MAX_STEPS = 10_000
 
+#: Total characters any one analysis may build, across every value. Bounds
+#: the shapes a per-value cap cannot: many capped values are as expensive as
+#: one uncapped one.
+MAX_TOTAL_CHARACTERS = 1_000_000
+
 #: Longest sequence a comprehension may iterate.
 MAX_ITERATIONS = 10_000
 
@@ -76,10 +81,25 @@ class UnsupportedCodeError(Exception):
 class _Budget:
     """Step and size limits, checked as the walk goes rather than after."""
 
-    __slots__ = ("steps",)
+    __slots__ = ("characters", "steps")
 
     def __init__(self) -> None:
         self.steps = 0
+        self.characters = 0
+
+    def charge(self, length: int) -> None:
+        """Account for `length` characters against the whole walk's budget.
+
+        A per-value cap bounds one string; it does not bound ten thousand of
+        them. A comprehension building a fresh capped-size string per item
+        reached 44 MB from 19 KB of source, which is the same
+        unbounded-total defect as the list doubling, one level up. The total
+        is charged wherever a value is built, so no shape can spend more than
+        `MAX_TOTAL_CHARACTERS` however it is arranged.
+        """
+        self.characters += length
+        if self.characters > MAX_TOTAL_CHARACTERS:
+            raise UnsupportedCodeError(BUDGET_EXCEEDED)
 
     def step(self) -> None:
         self.steps += 1
@@ -92,8 +112,7 @@ class _Budget:
             raise UnsupportedCodeError(BUDGET_EXCEEDED)
         return value
 
-    @staticmethod
-    def check_length(length: int) -> None:
+    def check_length(self, length: int) -> None:
         """Refuse an oversized result before it is built.
 
         Every string operation here can compute its own output length from
@@ -104,6 +123,7 @@ class _Budget:
         """
         if length > MAX_STRING_LENGTH:
             raise UnsupportedCodeError(BUDGET_EXCEEDED)
+        self.charge(length)
 
     @staticmethod
     def check_sequence(value: list[object]) -> list[object]:
@@ -133,17 +153,17 @@ def _require_int(value: object, what: str) -> int:
     return value
 
 
-def _call_join(target: object, args: Sequence[object]) -> str:
+def _call_join(target: object, args: Sequence[object], budget: "_Budget") -> str:
     separator = _require_str(target, "join")
     if len(args) != 1 or not isinstance(args[0], (list, tuple)):
         raise UnsupportedCodeError("join expects one sequence")
     parts = [_require_str(part, "join") for part in args[0]]
     if parts:
-        _Budget.check_length(sum(len(part) for part in parts) + len(separator) * (len(parts) - 1))
+        budget.check_length(sum(len(part) for part in parts) + len(separator) * (len(parts) - 1))
     return separator.join(parts)
 
 
-def _call_replace(target: object, args: Sequence[object]) -> str:
+def _call_replace(target: object, args: Sequence[object], budget: "_Budget") -> str:
     text = _require_str(target, "replace")
     if len(args) != 2:
         raise UnsupportedCodeError("replace expects two arguments")
@@ -153,11 +173,11 @@ def _call_replace(target: object, args: Sequence[object]) -> str:
         # `"abc".replace("", "x")` inserts between every character, which is
         # a cheap way to multiply a string; nothing legitimate needs it.
         raise UnsupportedCodeError("replace with an empty pattern")
-    _Budget.check_length(len(text) + text.count(old) * (len(new) - len(old)))
+    budget.check_length(len(text) + text.count(old) * (len(new) - len(old)))
     return text.replace(old, new)
 
 
-def _call_chr(_target: object, args: Sequence[object]) -> str:
+def _call_chr(_target: object, args: Sequence[object], budget: "_Budget") -> str:
     if len(args) != 1:
         raise UnsupportedCodeError("chr expects one argument")
     code = _require_int(args[0], "chr")
@@ -166,7 +186,7 @@ def _call_chr(_target: object, args: Sequence[object]) -> str:
     return chr(code)
 
 
-def _call_ord(_target: object, args: Sequence[object]) -> int:
+def _call_ord(_target: object, args: Sequence[object], budget: "_Budget") -> int:
     if len(args) != 1:
         raise UnsupportedCodeError("ord expects one argument")
     text = _require_str(args[0], "ord")
@@ -175,7 +195,7 @@ def _call_ord(_target: object, args: Sequence[object]) -> int:
     return ord(text)
 
 
-def _call_reversed(_target: object, args: Sequence[object]) -> list[object]:
+def _call_reversed(_target: object, args: Sequence[object], budget: "_Budget") -> list[object]:
     if len(args) != 1:
         raise UnsupportedCodeError("reversed expects one argument")
     value = args[0]
@@ -186,7 +206,7 @@ def _call_reversed(_target: object, args: Sequence[object]) -> list[object]:
     raise UnsupportedCodeError("reversed expects a string or sequence")
 
 
-def _call_split(target: object, args: Sequence[object]) -> list[str]:
+def _call_split(target: object, args: Sequence[object], budget: "_Budget") -> list[str]:
     text = _require_str(target, "split")
     if not args:
         return text.split()
@@ -207,7 +227,7 @@ def _nullary(name: str, method: Callable[[str], str]) -> Callable[..., str]:
     reach a method that is not in it.
     """
 
-    def call(target: object, args: Sequence[object]) -> str:
+    def call(target: object, args: Sequence[object], budget: "_Budget") -> str:
         if args:
             raise UnsupportedCodeError(f"{name} expects no arguments")
         text = _require_str(target, name)
@@ -219,8 +239,8 @@ def _nullary(name: str, method: Callable[[str], str]) -> Callable[..., str]:
         # has -- so the input is screened against that bound first and the
         # result is checked afterwards. The worst allocation is therefore
         # three times an already-capped string, not an unbounded one.
-        _Budget.check_length(len(text) * _MAX_CASE_EXPANSION)
-        return _Budget.check_string(method(text))
+        budget.check_length(len(text) * _MAX_CASE_EXPANSION)
+        return method(text)
 
     return call
 
@@ -229,7 +249,7 @@ def _nullary(name: str, method: Callable[[str], str]) -> Callable[..., str]:
 #: `open`, `__import__`, `eval` -- finds no entry and is rejected; the name is
 #: never resolved against real builtins, so there is nothing to reach even if
 #: the table were wrong.
-_METHODS: dict[str, Callable[[object, Sequence[object]], Any]] = {
+_METHODS: dict[str, Callable[..., Any]] = {
     "join": _call_join,
     "replace": _call_replace,
     "upper": _nullary("upper", str.upper),
@@ -238,7 +258,7 @@ _METHODS: dict[str, Callable[[object, Sequence[object]], Any]] = {
     "split": _call_split,
 }
 
-_FUNCTIONS: dict[str, Callable[[object, Sequence[object]], Any]] = {
+_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "chr": _call_chr,
     "ord": _call_ord,
     "reversed": _call_reversed,
@@ -265,10 +285,13 @@ class RestrictedCodeAnalyzer:
             return CodeAnalysis(
                 result=None, operations=tuple(operations), rejected_reason=exc.reason
             )
-        except RecursionError:
-            # A deeply nested expression can exhaust the walk's own recursion
-            # before the step budget notices. That is an unsupported snippet,
-            # not a crash.
+        except (RecursionError, MemoryError):
+            # A deeply nested expression can exhaust the walk's own
+            # recursion, and a large allocation can fail outright, before the
+            # budget notices either. Both are unsupported snippets rather
+            # than crashes the caller has to handle -- and `analyze` promises
+            # never to raise for a bad snippet, which only holds if it means
+            # every bad snippet.
             return CodeAnalysis(
                 result=None, operations=tuple(operations), rejected_reason=BUDGET_EXCEEDED
             )
@@ -287,8 +310,23 @@ class RestrictedCodeAnalyzer:
         budget = _Budget()
         scope: dict[str, object] = {}
         last: object = None
-        for statement in module.body:
-            last = self._statement(statement, scope, budget, operations)
+        for index, statement in enumerate(module.body):
+            try:
+                last = self._statement(statement, scope, budget, operations)
+            except UnsupportedCodeError:
+                # A *trailing* statement outside the subset does not discard
+                # what the earlier ones already built: `print(msg)` is the
+                # likeliest hand-written last line, and rejecting the whole
+                # snippet for it took corpus resolution to zero. But this is
+                # tolerance for a coda, not for a failure. It applies only
+                # when an earlier statement already bound `msg` to a string,
+                # so a snippet whose *own* work is refused still reports that
+                # refusal -- an earlier version tested "any string in scope"
+                # and swallowed a genuine size refusal because an operand
+                # happened to be one.
+                if index > 0 and isinstance(scope.get("msg"), str):
+                    break
+                raise
         if isinstance(last, str):
             return last
         # The generator's snippets end by assigning the message to a name, so
@@ -327,6 +365,10 @@ class RestrictedCodeAnalyzer:
         budget.step()
         if isinstance(node, ast.Constant):
             if isinstance(node.value, str):
+                # Not charged against the running total: a literal is already
+                # bounded by the source cap, and charging it made an ordinary
+                # concatenation of two large literals refuse. Only values the
+                # walk *builds* can multiply.
                 return _Budget.check_string(node.value)
             if isinstance(node.value, int) and not isinstance(node.value, bool):
                 return node.value
@@ -335,7 +377,9 @@ class RestrictedCodeAnalyzer:
             if node.id not in scope:
                 # Never resolved against builtins: an unknown name is a
                 # rejection, not a lookup.
-                raise UnsupportedCodeError(f"unknown name {node.id!r}")
+                # The identifier is attacker-chosen and reasons reach traces, so
+                # the node kind is reported rather than the name itself.
+                raise UnsupportedCodeError("unknown name")
             return scope[node.id]
         if isinstance(node, (ast.List, ast.Tuple)):
             return _Budget.check_sequence(
@@ -364,7 +408,7 @@ class RestrictedCodeAnalyzer:
         left = self._expression(node.left, scope, budget, operations)
         right = self._expression(node.right, scope, budget, operations)
         if isinstance(left, str) and isinstance(right, str):
-            _Budget.check_length(len(left) + len(right))
+            budget.check_length(len(left) + len(right))
             return left + right
         if isinstance(left, list) and isinstance(right, list):
             if len(left) + len(right) > MAX_ITERATIONS:
@@ -387,19 +431,19 @@ class RestrictedCodeAnalyzer:
         if isinstance(node.func, ast.Name):
             handler = _FUNCTIONS.get(node.func.id)
             if handler is None:
-                raise UnsupportedCodeError(f"call to {node.func.id!r}")
+                raise UnsupportedCodeError("call to an unsupported function")
             operations.append(node.func.id)
-            return handler(None, args)
+            return handler(None, args, budget)
         if isinstance(node.func, ast.Attribute):
             method = _METHODS.get(node.func.attr)
             if method is None:
-                raise UnsupportedCodeError(f"method {node.func.attr!r}")
+                raise UnsupportedCodeError("unsupported method")
             # The receiver is evaluated through this same walk, so it can only
             # ever be a value this module built. An attribute on a module --
             # `os.system` -- fails here because `os` is not a known name.
             target = self._expression(node.func.value, scope, budget, operations)
             operations.append(node.func.attr)
-            return method(target, args)
+            return method(target, args, budget)
         raise UnsupportedCodeError("call to a computed value")
 
     def _comprehension(

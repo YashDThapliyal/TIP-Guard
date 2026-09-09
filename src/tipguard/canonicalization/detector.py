@@ -623,41 +623,44 @@ def _best_letters_decode(paragraph: str) -> tuple[Family, float] | None:
 _MIN_PAYLOAD_CHARS = 12
 
 
-def _is_prose_marker(token: str, alphabet: str) -> bool:
-    """Whether `token` provably cannot belong to a payload over `alphabet`.
+#: The labels a wrapper writes to introduce a payload. Used where no alphabet
+#: argument is available -- Python, whose string literals may contain any
+#: character at all, so nothing can be proven from a token's contents.
+_PROSE_MARKERS = frozenset({"p.s.", "n.b.", "p.p.s.", "e.g.", "i.e.", "nb.", "ps."})
 
-    Proof, not a guess. Three heuristics in a row deleted real ciphertext
-    here: "any token with interior punctuation" ate a payload opening
-    "3.14"; "single letters separated by full stops" ate a shifted "U.S.",
-    which has exactly that shape; and a closed list of English labels still
-    ate a plaintext abbreviation that happened to shift into one of them.
-    Every shape rule fails for the same reason -- a label and a fragment of
-    ciphertext can look identical.
 
-    What cannot look identical is a character the alphabet does not contain.
-    Base64 has no full stop; morse is dots, dashes and slashes with no
-    letters. A token carrying a character outside the payload's own alphabet
-    was never payload, and stripping it is safe by construction.
+def _is_prose_marker(token: str, alphabet: str | None) -> bool:
+    """Whether `token` is a wrapper's label rather than payload.
 
-    Caesar and reverse have no such guarantee: they preserve punctuation, so
-    "P.S." is a legitimate ciphertext token. They therefore pass an empty
-    alphabet, nothing is ever stripped, and their decode carries the label
-    through as a harmless prefix. Leaving four characters of noise on a
-    correct decode is cheap; deleting a payload's first word is not.
+    Two grounds, and the caller's alphabet decides which. Where the payload
+    has a closed alphabet -- base64 has no full stop, morse has no letters --
+    a token carrying a character outside it was provably never payload.
+
+    Where it does not, the token's contents prove nothing and the closed list
+    of English labels is used instead. Python is that case: its string
+    literals may contain any character, and attribute access is *in* the
+    analyzer's whitelist, so a dot is ordinary payload content. An earlier
+    version claimed an alphabet proof for Python anyway and destroyed real
+    snippets with it -- a payload beginning with a string literal containing
+    "§" lost its opening token.
     """
-    return bool(alphabet) and any(char not in alphabet for char in token)
+    if alphabet is None:
+        # No grounds at all: the caller's payload can contain anything a
+        # label can, so nothing may be stripped. Caesar and reverse pass
+        # this, and a label rides through their decode as a prefix.
+        return False
+    if alphabet:
+        return any(char not in alphabet for char in token)
+    return token.lower() in _PROSE_MARKERS
 
 
 #: What each family's payload may contain. Empty means "no guarantee", so
 #: nothing is stripped for that family.
 BASE64_ALPHABET = string.ascii_letters + string.digits + "+/="
 MORSE_ALPHABET = ".-/ "
-#: Python has no full stop outside a float or an attribute, and a snippet
-#: this analyzer accepts has neither, so a token carrying one is a label.
-PYTHON_ALPHABET = string.ascii_letters + string.digits + "_=\"'[](),+ "
 
 
-def _strip_prose_marker(span: str, alphabet: str = "") -> str:
+def _strip_prose_marker(span: str, alphabet: str | None = None) -> str:
     """`span` without a leading prose marker such as "P.S.".
 
     A caesar or reverse payload is pure letters and spaces -- the encoders
@@ -668,7 +671,12 @@ def _strip_prose_marker(span: str, alphabet: str = "") -> str:
     corpus test's independent oracle made that mistake identically, so the
     test agreed with the bug instead of catching it.
     """
-    tokens = span.split()
+    # The first line only, and the newline is kept. `str.split()` splits on
+    # newlines too, so rejoining with spaces flattened a two-line snippet
+    # into one and made it a syntax error -- which is what left four code
+    # cases unresolved.
+    head, separator, tail = span.partition("\n")
+    tokens = head.split()
     # At most one token, and only when a real payload remains. A ciphertext
     # can legitimately begin with an abbreviation -- a shifted "U.S." is
     # indistinguishable from a label -- so the rule is bounded rather than
@@ -679,9 +687,9 @@ def _strip_prose_marker(span: str, alphabet: str = "") -> str:
     remainder = " ".join(tokens[1:])
     # Measured in characters, not tokens: a base64 payload is one long token,
     # so a token-count guard blocked exactly the cases this exists to fix.
-    if len(remainder) < _MIN_PAYLOAD_CHARS:
+    if len(remainder) + len(tail) < _MIN_PAYLOAD_CHARS:
         return span
-    return remainder
+    return remainder + separator + tail
 
 
 def letters_payload(text: str) -> str | None:
@@ -852,7 +860,7 @@ def _extract_code(text: str) -> str | None:
         # provably not part of the snippet -- the same alphabet argument the
         # marker rule rests on. Without this, thirteen difficulty-4 cases
         # failed to parse at all because the block opened with "P.S.".
-        candidate = _strip_prose_marker(raw, PYTHON_ALPHABET)
+        candidate = _strip_prose_marker(raw, "")
         if len(candidate) > MAX_SOURCE_LENGTH or not PYTHON_STRING_BUILDER.search(candidate):
             continue
         try:

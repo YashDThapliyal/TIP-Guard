@@ -9,12 +9,13 @@ from tipguard.benchmark.io import load_cases
 from tipguard.canonicalization.code_analysis import (
     BUDGET_EXCEEDED,
     MAX_SOURCE_LENGTH,
+    CodeAnalysis,
     RestrictedCodeAnalyzer,
 )
 from tipguard.canonicalization.detector import _extract_code
 
 
-def _analyze(source: str) -> object:
+def _analyze(source: str) -> CodeAnalysis:
     return RestrictedCodeAnalyzer().analyze(source)
 
 
@@ -84,15 +85,53 @@ def test_multiplication_is_not_whitelisted() -> None:
     assert analysis.rejected_reason == "operator Mult"
 
 
-def test_a_long_comprehension_is_refused_before_it_runs() -> None:
-    analysis = _analyze("msg = [c for c in " + str(list(range(20_000))) + "]")
-    assert analysis.rejected_reason == BUDGET_EXCEEDED
+#: One shape per budget guard, each the thing that guard exists to stop.
+#: Named rather than inlined so a failure reports the guard, not 18 KB of
+#: generated source.
+BUDGET_CASES = {
+    # Flat, not nested: a deeply nested expression is refused by the walk's
+    # own recursion limit long before the step budget, which made an earlier
+    # version of this test prove nothing about MAX_STEPS.
+    # A comprehension, because it is the only shape that buys many steps
+    # with little source: flat statements hit MAX_SOURCE_LENGTH first, and a
+    # nested expression hits the walk's recursion limit first, so neither can
+    # demonstrate this guard.
+    "MAX_STEPS": 'msg = "".join([c for c in "' + "a" * 12_000 + '"])',
+    "MAX_ITERATIONS": 'msg = [c for c in "' + "a" * 15_000 + '"]',
+    "MAX_STRING_LENGTH": 'msg = "' + "a" * 9_000 + '".replace("a", "bb")',
+    "MAX_TOTAL_CHARACTERS": (
+        'S = "' + "a" * 8_800 + '"\nmsg = "".join([S.upper() for c in "' + "c" * 900 + '"])'
+    ),
+}
 
 
-def test_a_step_budget_stops_a_deep_expression() -> None:
-    analysis = _analyze('msg = "a"' + ' + "a"' * 20_000)
-    assert analysis.result is None
-    assert analysis.rejected_reason == BUDGET_EXCEEDED
+@pytest.mark.parametrize("guard", sorted(BUDGET_CASES))
+def test_each_budget_guard_is_load_bearing(guard: str) -> None:
+    """Each limit is shown to be the one refusing its own case.
+
+    Two of these previously built sources longer than MAX_SOURCE_LENGTH, so
+    `ast.parse` was never reached and the guards they named had no test at
+    all. Even under that cap the guards overlap, so asserting a refusal
+    proves nothing about which one fired: every *other* limit is raised out
+    of the way and the named one must still refuse.
+
+    "Every other limit" includes the interpreter's recursion limit, which is
+    a fifth guard the module relies on without naming it.
+    """
+    from tipguard.canonicalization import code_analysis
+
+    source = BUDGET_CASES[guard]
+    assert len(source) < MAX_SOURCE_LENGTH, "the source cap would refuse this first"
+    others = set(BUDGET_CASES) - {guard}
+    saved = {name: getattr(code_analysis, name) for name in others}
+    try:
+        for name in others:
+            setattr(code_analysis, name, 10**9)
+        analysis = _analyze(source)
+    finally:
+        for name, value in saved.items():
+            setattr(code_analysis, name, value)
+    assert analysis.rejected_reason == BUDGET_EXCEEDED, f"{guard} did not refuse on its own"
 
 
 def test_a_long_source_is_refused_before_parsing() -> None:
@@ -122,7 +161,9 @@ def test_an_unknown_name_is_never_resolved_against_builtins() -> None:
     # The failure has to be "unknown name", not a successful lookup of the
     # real builtin, which is what keeps the whitelist closed.
     analysis = _analyze("msg = print")
-    assert analysis.rejected_reason == "unknown name 'print'"
+    # The reason names the node kind, never the identifier: identifiers are
+    # attacker-chosen and reasons reach traces.
+    assert analysis.rejected_reason == "unknown name"
 
 
 def test_a_module_attribute_chain_is_rejected() -> None:
@@ -131,7 +172,7 @@ def test_a_module_attribute_chain_is_rejected() -> None:
     # that no part of it resolves to the real `os`.
     analysis = _analyze('msg = os.environ.get("HOME")')
     assert analysis.result is None
-    assert analysis.rejected_reason in {"method 'get'", "unknown name 'os'"}
+    assert analysis.rejected_reason in {"unsupported method", "unknown name"}
 
 
 def test_the_operations_used_are_reported() -> None:
@@ -152,28 +193,72 @@ def test_a_snippet_that_builds_no_string_is_rejected() -> None:
     assert _analyze("x = 1").rejected_reason == "snippet does not build a string"
 
 
-def test_the_module_contains_no_execution_primitive() -> None:
+def test_the_module_never_names_an_execution_primitive() -> None:
     """The guarantee the whole module rests on, asserted rather than assumed.
 
-    A reviewer should not have to take the docstring's word for it, and a
-    later edit that reaches for `eval` to handle one more shape should fail
-    here rather than in review.
+    Every *load* of a banned name is rejected, not just a direct call by that
+    name. An earlier version inspected only `ast.Call` with a plain-name
+    function, which seven real evasions walked straight through: an alias
+    (`_e = eval`), the attribute form (`builtins.eval`), dict dispatch, and
+    `open` -- which was not even on the list.
     """
     import ast
 
-    tree = ast.parse(
-        Path("src/tipguard/canonicalization/code_analysis.py").read_text(encoding="utf-8")
-    )
-    # Parsed rather than grepped: the module names these primitives in its own
-    # prose to explain why it does not use them, and a text scan cannot tell
-    # a docstring from a call. A call node cannot hide in a comment.
-    banned = {"eval", "exec", "compile", "__import__", "globals", "locals", "getattr"}
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    banned = {
+        "eval",
+        "exec",
+        "compile",
+        "__import__",
+        "__builtins__",
+        "globals",
+        "locals",
+        "getattr",
+        "setattr",
+        "vars",
+        "open",
+        "subprocess",
+        "importlib",
+        "os",
+        "sys",
     }
-    assert not (called & banned), f"module calls {sorted(called & banned)}"
+    tree = ast.parse(_module_source())
+    named: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            named.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            named.add(node.attr)
+        elif isinstance(node, ast.Import):
+            named.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            named.add(node.module.split(".")[0])
+    assert not (named & banned), f"module names {sorted(named & banned)}"
+
+
+def test_the_module_imports_nothing_that_can_act() -> None:
+    # `ast` parses and `collections.abc`/`typing` are type-only; nothing here
+    # can touch a process or a file even if the whitelist were wrong.
+    import ast
+
+    imported = {
+        alias.name.split(".")[0]
+        for node in ast.walk(ast.parse(_module_source()))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module.split(".")[0]
+        for node in ast.walk(ast.parse(_module_source()))
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    assert imported <= {"ast", "collections", "typing", "tipguard"}, imported
+
+
+def _module_source() -> str:
+    # Located from this module's own file rather than the working directory,
+    # so the test does not depend on where pytest was started.
+    from tipguard.canonicalization import code_analysis
+
+    return Path(code_analysis.__file__).read_text(encoding="utf-8")
 
 
 def test_every_code_case_in_the_corpus_resolves() -> None:
@@ -266,6 +351,8 @@ MALFORMED_CALLS = (
     ("msg = [c for c in 1]", "comprehension over an unsupported value"),
     ('msg = 1 + "a"', "addition of unsupported types"),
     ('msg = "a"()', "call to a computed value"),
+    ("msg = print", "unknown name"),
+    ('msg = sorted(["b", "a"])', "call to an unsupported function"),
 )
 
 
@@ -321,3 +408,60 @@ def test_an_oversized_result_is_refused_before_it_is_built(source: str, budget_m
         tracemalloc.stop()
     assert analysis.rejected_reason == BUDGET_EXCEEDED
     assert peak < budget_mb * 1_000_000, f"allocated {peak / 1e6:.2f} MB before refusing"
+
+
+def test_an_attacker_chosen_identifier_never_reaches_a_reason() -> None:
+    # A snippet can name a variable after the value it is trying to exfiltrate,
+    # and rejection reasons are stored in traces. Only node kinds are reported.
+    secret = "CANARY_7f3a_KESTREL_9021"
+    for source in (f"msg = {secret}", f"msg = {secret}()", f'msg = "a".{secret}()'):
+        analysis = _analyze(source)
+        assert analysis.rejected_reason is not None
+        assert secret not in analysis.rejected_reason
+        assert secret not in json.dumps(analysis.model_dump())
+
+
+def test_a_reason_is_short_whatever_the_snippet_looks_like() -> None:
+    # Reported lengths are bounded by the vocabulary of node kinds, not by the
+    # snippet: a 19,000-character identifier once produced a 19,015-character
+    # reason.
+    analysis = _analyze("msg = " + "z" * 19_000)
+    assert analysis.rejected_reason is not None
+    assert len(analysis.rejected_reason) < 100
+
+
+def test_a_trailing_unsupported_statement_does_not_discard_the_result() -> None:
+    # `print(msg)` is the likeliest hand-written last line, and rejecting the
+    # whole snippet for it took corpus resolution to zero.
+    assert _analyze('msg = "he§§o".replace("§", "l")\nprint(msg)').result == "hello"
+    assert _analyze('msg = "hi"\nassert msg').result == "hi"
+
+
+def test_tolerance_for_a_coda_does_not_swallow_a_real_refusal() -> None:
+    # The tolerance applies only once `msg` is bound. A snippet whose own work
+    # is refused still reports that refusal -- an earlier version tested "any
+    # string in scope" and swallowed a genuine size refusal because an operand
+    # happened to be one.
+    oversized = 'a = "' + "x" * 9000 + '"\nmsg = a + a'
+    assert _analyze(oversized).rejected_reason == BUDGET_EXCEEDED
+    assert _analyze('msg = "a" * 10').rejected_reason == "operator Mult"
+
+
+def test_a_comprehension_cannot_build_many_capped_strings() -> None:
+    """A per-value cap bounds one string; it does not bound ten thousand.
+
+    Building a fresh capped-size string per item reached 44 MB from 19 KB of
+    source -- the same unbounded-total defect as the list doubling, one level
+    up. The running total is charged wherever a value is built.
+    """
+    import tracemalloc
+
+    source = 'S = "' + "a" * 8800 + '"\nmsg = "".join([S.upper() for c in "' + "c" * 9900 + '"])'
+    tracemalloc.start()
+    try:
+        analysis = _analyze(source)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert analysis.rejected_reason == BUDGET_EXCEEDED
+    assert peak < 20_000_000, f"allocated {peak / 1e6:.0f} MB before refusing"
