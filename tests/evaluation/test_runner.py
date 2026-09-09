@@ -9,7 +9,12 @@ from tipguard.benchmark.schema import CaseType, Decision
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
 from tipguard.evaluation import runner as runner_module
-from tipguard.evaluation.runner import RUN_COMPLETE_MARKER, run_experiment
+from tipguard.evaluation.runner import (
+    RUN_ARTIFACTS,
+    RUN_COMPLETE_MARKER,
+    RUN_OWNER_MARKER,
+    run_experiment,
+)
 from tipguard.models import types as model_types
 from tipguard.models.cache import ResponseCache
 from tipguard.models.types import ProviderError
@@ -377,3 +382,105 @@ def test_run_experiment_redacts_records_from_other_tipguard_modules(
     assert captured
     assert secret not in captured[0].error  # type: ignore[attr-defined]
     assert "[REDACTED]" in captured[0].error  # type: ignore[attr-defined]
+
+
+def _run_smoke(repo_root: Path, tmp_path: Path, run_id: str):  # type: ignore[no-untyped-def]
+    return run_experiment(
+        _smoke_config(repo_root, tmp_path), Path("experiments/smoke-test.yaml"), run_id=run_id
+    )
+
+
+def test_fresh_run_dir_records_ownership_then_clears_it(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    artifacts = _run_smoke(repo_root, tmp_path, "fresh")
+    assert not artifacts.resumed
+    assert (artifacts.run_dir / RUN_COMPLETE_MARKER).exists()
+    # Ownership is released once the marker is written, so the finished run
+    # is never mistaken for one still in flight.
+    assert not (artifacts.run_dir / RUN_OWNER_MARKER).exists()
+
+
+def test_a_run_in_progress_is_refused_rather_than_resumed(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Two processes drawing the same generated id must not both write."""
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    run_dir = tmp_path / "in-flight"
+    runner_module._reserve_run_dir(run_dir)  # stands in for the live run
+    with pytest.raises(ConfigError, match="in progress"):
+        _run_smoke(repo_root, tmp_path, "in-flight")
+    assert (run_dir / RUN_OWNER_MARKER).exists()
+
+
+def test_a_stale_ownership_file_is_treated_as_in_progress(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    # Guessing that a leftover file means a dead process would overwrite a
+    # live run, so the id is refused and the message says what to do.
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    run_dir = tmp_path / "stale"
+    run_dir.mkdir(parents=True)
+    (run_dir / RUN_OWNER_MARKER).write_text("not even json", encoding="utf-8")
+    with pytest.raises(ConfigError, match="in progress"):
+        _run_smoke(repo_root, tmp_path, "stale")
+
+
+def test_a_legacy_complete_run_dir_is_refused_not_overwritten(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Runs finished before markers existed must keep the old refusal."""
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    run_dir = tmp_path / "legacy"
+    run_dir.mkdir(parents=True)
+    for name in RUN_ARTIFACTS:
+        (run_dir / name).write_text("old results", encoding="utf-8")
+    with pytest.raises(ConfigError, match="before completion markers"):
+        _run_smoke(repo_root, tmp_path, "legacy")
+    assert (run_dir / "results.jsonl").read_text(encoding="utf-8") == "old results"
+
+
+def test_a_marker_without_its_artifacts_says_so(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    run_dir = tmp_path / "hollow"
+    run_dir.mkdir(parents=True)
+    (run_dir / RUN_COMPLETE_MARKER).write_text("", encoding="utf-8")
+    (run_dir / "results.jsonl").write_text("only one\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="marked complete but is missing"):
+        _run_smoke(repo_root, tmp_path, "hollow")
+
+
+def test_a_failed_run_releases_its_ownership_file(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("write boom")
+
+    monkeypatch.setattr(runner_module, "_write_artifacts", boom)
+    with pytest.raises(RuntimeError):
+        _run_smoke(repo_root, tmp_path, "released")
+    assert not (tmp_path / "released" / RUN_OWNER_MARKER).exists()
+    # And with no artifacts written, the reservation is gone entirely.
+    assert not (tmp_path / "released").exists()
+
+
+def test_claiming_a_directory_twice_loses_the_race(tmp_path: Path) -> None:
+    # The window `_classify_existing_run_dir` cannot close: two processes
+    # both see a marker-less, artifact-less directory and both try to claim
+    # it. Exclusive creation of the ownership file decides.
+    run_dir = tmp_path / "raced"
+    run_dir.mkdir()
+    runner_module._claim_ownership(run_dir)
+    with pytest.raises(ConfigError, match="in progress"):
+        runner_module._claim_ownership(run_dir)

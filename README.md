@@ -113,10 +113,19 @@ git-ignored):
 - `manifest.json` — run metadata: `run_id`, `created_at`, `config_path`, the resolved `config`,
   `config_hash`, `dataset_sha256`, `tipguard_version`, `python_version`, `defense`, and
   `main_model`.
-- `.complete` — an empty marker written only after all three artifacts are on disk. A run
-  directory that has it is finished and `evaluate` refuses to reuse its `--run-id`; a directory
-  without it is what a crashed run left behind, so `evaluate` reuses it and says
-  `resumed incomplete run: <run_id>`.
+- `.complete` — an empty marker written only after all three artifacts are on disk.
+- `.running` — written when a run claims the directory and removed when it completes or fails, so
+  a directory still carrying one belongs to a run that is either live or was killed outright.
+  Creating it is the atomic claim, which is what stops two runs that drew the same generated id
+  (the timestamp has one-second resolution) from writing over each other.
+
+Together those two decide what reusing a `--run-id` does. `evaluate` refuses a directory that is
+marked complete, one that another run appears to hold, and one holding all three artifacts with
+no marker — that last is how a run finished before markers existed looks, and it says to delete
+the directory or choose another id. Only a directory with no marker, no owner and an incomplete
+set of artifacts is the wreckage of a crashed run: that one is reused, with
+`resumed incomplete run: <run_id>`. A stale `.running` left by a killed process is refused rather
+than guessed at, since guessing wrong overwrites a live run's results.
 
 Set the `TIPGUARD_OUTPUT_DIR` environment variable to override `output_dir` from a config file
 without editing it (used by the smoke-reproducibility test so it never writes into
