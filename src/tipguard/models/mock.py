@@ -1,5 +1,7 @@
 """Deterministic scripted provider for tests and offline smoke runs."""
 
+import hashlib
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -86,6 +88,26 @@ class MockProvider:
         self.model = model
         self._rules = tuple(rules)
         self._default = default
+
+    @property
+    def script_fingerprint(self) -> str:
+        """A digest of what this mock will say, for the response cache.
+
+        A cached reply is keyed by the request and by the fields of the model
+        spec that shape it, which is right for a real provider: the same
+        request to the same model gives the same answer. A mock's answer is
+        decided by its scripted rules instead, and those live in code, not in
+        the spec -- so rewriting the script leaves the key unchanged and a
+        stale reply is replayed forever. That bit this project once already:
+        `mock-judge` was changed from echoing to answering in JSON, and any
+        run with an existing cache kept getting the echo, which reads as a
+        parser failure and makes every guard built on it block all traffic.
+        """
+        material = json.dumps(
+            [[rule.pattern, rule.response] for rule in self._rules] + [self._default],
+            sort_keys=True,
+        )
+        return hashlib.sha256(material.encode()).hexdigest()[:16]
 
     def _respond_to(self, user_text: str) -> str:
         for rule in self._rules:

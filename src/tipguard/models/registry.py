@@ -38,16 +38,22 @@ def build_provider(spec: ModelSpec) -> ModelProvider:
     assert_never(spec.provider)
 
 
-def _cache_namespace(spec: ModelSpec) -> str:
-    """Namespace a cached response by every request-shaping field a provider
-    resolves from the spec, so specs that differ only in temperature or
-    max_tokens never share a cached response (pricing is not part of the
-    request, so it is excluded).
+def _cache_namespace(spec: ModelSpec, provider: ModelProvider) -> str:
+    """Namespace a cached response by everything that decides the answer.
+
+    For a real provider that is the request-shaping fields of the spec, so
+    specs differing only in temperature or max_tokens never share a cached
+    response (pricing does not shape the request, so it is excluded). A
+    scripted mock's answer is decided by its rules instead, which live in
+    code rather than in the spec, so its fingerprint joins the key -- without
+    it, editing a mock's script leaves every previously cached reply in place
+    and the old behaviour is replayed indefinitely.
     """
     identity = {
         "base_url": spec.base_url,
         "temperature": spec.temperature,
         "max_tokens": spec.max_tokens,
+        "script": getattr(provider, "script_fingerprint", ""),
     }
     return json.dumps(identity, sort_keys=True)
 
@@ -72,7 +78,10 @@ class ProviderRegistry:
             provider = build_provider(spec)
             if self._cache is not None:
                 provider = CachedProvider(
-                    provider, self._cache, namespace=_cache_namespace(spec), spec=spec
+                    provider,
+                    self._cache,
+                    namespace=_cache_namespace(spec, provider),
+                    spec=spec,
                 )
             self._providers[alias] = provider
         return self._providers[alias]
