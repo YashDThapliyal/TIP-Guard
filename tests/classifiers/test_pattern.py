@@ -192,50 +192,119 @@ def test_a_hex_digest_still_looks_like_a_substitution_cipher() -> None:
     assert _score(text).evidence == ("substitution_density",)
 
 
-#: The same fully substituted payload, bare and with the punctuation an
-#: ordinary sentence would attach. All three must behave identically: token
-#: edges are stripped of everything that is not a word position before the
-#: token is judged.
+#: "asset" spelled entirely in leet digits, bare and with the punctuation an
+#: ordinary sentence would attach. All three must behave identically, and all
+#: three are declined: a digit-only token is an identifier as readily as a
+#: word. See `_is_glyph_word` for why this is the honest answer rather than a
+#: gap.
 FULLY_SUBSTITUTED = (
     "45537 45537 45537",
     "45537, 45537, 45537.",
     "(45537) 45537; 45537!",
 )
 
-#: Four-digit identifiers made only of leet glyphs, sitting in ordinary prose.
-#: "4557" is a valid ticket number and a valid substitution of "asst", so
-#: length alone cannot separate them -- only the shape of the surrounding
-#: text can. The pair differs by one digit that is not a leet value, and the
-#: two sentences must score the same.
-TICKET_PROSE = (
-    "Please comply with ticket 4557 before noon today.",
-    "Please comply with ticket 4582 before noon today.",
+#: Identifiers made only of leet digits, in prose short enough that a
+#: whole-text ratio cannot dilute them. Each pairs with a control differing
+#: only in digits that are not leet values; the two must score the same.
+IDENTIFIER_PAIRS = (
+    ("Ticket 4557 open.", "Ticket 4582 open."),
+    ("Ship 4501 and 3357.", "Ship 4692 and 3368."),
+    ("Dial 5510 or 4471 today.", "Dial 6629 or 4692 today."),
+    ("Zip 10013 room 4401 desk.", "Zip 26629 room 4692 desk."),
+    (
+        "Card number 4111 1111 1111 1111 expires soon.",
+        "Card number 4222 2222 2222 2222 expires soon.",
+    ),
+    ("Serials: 4471, 0053, 1175, 3401, 5510.", "Serials: 4692, 0068, 1296, 3862, 6629."),
+    ("Lot (4501) (3357) (1053) shipped.", "Lot (4692) (3368) (1068) shipped."),
+    (
+        "Please comply with ticket 4557 before noon today.",
+        "Please comply with ticket 4582 before noon today.",
+    ),
 )
+
+#: "asset" spelled in symbol glyphs, which no identifier ever is. The wrapper
+#: lengths bracket the point where a whole-text ratio used to lose it.
+SYMBOL_PAYLOAD = "@$$3+ @$$3+ @$$3+"
 
 
 @pytest.mark.parametrize("text", FULLY_SUBSTITUTED)
-def test_a_fully_substituted_passage_is_seen_however_it_is_punctuated(text: str) -> None:
-    # "asset" leets to "45537", which keeps no letter at all, so the
-    # lettered-token guard alone made it invisible to the rule meant to catch
-    # it. A passage that is mostly all-glyph tokens is read as substituted
-    # text; attached punctuation must not change that.
-    assert _score(text).evidence == ("substitution_density",)
-
-
-@pytest.mark.parametrize("text", TICKET_PROSE)
-def test_a_lone_leet_looking_identifier_is_not_substituted_text(text: str) -> None:
-    # An all-glyph token qualifies only when all-glyph tokens are at least a
-    # third of the text. One ticket number among seven words is not.
+def test_a_digit_only_payload_is_not_separable_from_an_identifier(text: str) -> None:
+    # The documented concession. "45537" is "asset" in leet digits and also a
+    # five-digit identifier, so the character-class rule declines to guess.
+    # Recovering it needs a dictionary check on the de-leeted token, which is
+    # the canonicalizer's job. Pinned so the limitation is visible rather than
+    # rediscovered as a surprise.
     assert "substitution_density" not in _score(text).evidence
 
 
-def test_the_two_ticket_sentences_score_identically() -> None:
-    # Both contain "comply", so both legitimately score 0.4 on the injection
-    # group. What must not differ is the density verdict: before this fix the
-    # all-leet-digit ticket added 0.3 and the other did not.
-    first, second = (_score(text) for text in TICKET_PROSE)
+@pytest.mark.parametrize(("leet", "control"), IDENTIFIER_PAIRS)
+def test_identifiers_built_from_leet_digits_score_as_their_controls(
+    leet: str, control: str
+) -> None:
+    # An all-digit token is never read as substituted text, so which digits it
+    # happens to use cannot change the verdict. These are short sentences and
+    # punctuated lists: the shapes a whole-text ratio got wrong in both
+    # directions.
+    first, second = _score(leet), _score(control)
+    assert "substitution_density" not in first.evidence
+    assert first.evidence == second.evidence
     assert first.score == second.score
-    assert first.evidence == second.evidence == ("comply",)
+
+
+@pytest.mark.parametrize("wrapper_words", [0, 6, 7, 8, 20])
+def test_a_symbol_payload_is_seen_at_any_wrapper_length(wrapper_words: int) -> None:
+    # The rule is local to the token, so prose around the payload cannot
+    # dilute it away. A whole-text ratio lost this payload at seven wrapper
+    # words, which is shorter than the benchmark's own wrappers.
+    wrapper = " ".join(["please"] * wrapper_words)
+    text = f"{wrapper} {SYMBOL_PAYLOAD}".strip()
+    assert "substitution_density" in _score(text).evidence
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "@$$3+, @$$3+; @$$3+!",
+        "(@$$3+) [@$$3+] {@$$3+}",
+        "-- -- -- @$$3+ -- -- -- @$$3+ -- -- -- @$$3+",
+    ],
+)
+def test_punctuation_around_a_symbol_payload_does_not_hide_it(text: str) -> None:
+    # Edge punctuation is stripped before a token is judged, and punctuation
+    # that stands as its own token neither hides the payload nor counts
+    # towards it.
+    assert "substitution_density" in _score(text).evidence
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The incident happened on 2026-09-08 and was closed the following morning.",
+        "The annual licence costs 1499.00 dollars plus 120.50 in support fees.",
+        "Please upgrade the agent to version 4.12.7 before the end of the quarter.",
+        "Call the duty desk on 555 0142 or 555 0199 if the pager does not answer.",
+        "We shipped 3 builds in 24 hours and rolled 2 of them back within 30 minutes.",
+    ],
+)
+def test_ordinary_numeric_prose_scores_nothing(text: str) -> None:
+    assert _score(text).score == 0.0
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ticket 4557! Urgent 3301! Call 5510!",
+        "!4557 !3301 !5510 were all reopened",
+        "Cost 4557$ plus 3301$ plus 5510$ in total",
+    ],
+)
+def test_a_glyph_that_is_also_punctuation_does_not_promote_an_identifier(text: str) -> None:
+    # Half the glyph set is punctuation, so a symbol at a token edge cannot be
+    # told from an exclamation mark, a currency sign or a quote. Only a symbol
+    # somewhere other than the first or last character counts, which is why
+    # "4557!" stays an identifier while "@$$3+" does not.
+    assert "substitution_density" not in _score(text).evidence
 
 
 def test_a_short_all_glyph_token_is_read_as_a_number() -> None:

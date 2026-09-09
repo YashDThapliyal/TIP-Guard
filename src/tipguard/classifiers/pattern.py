@@ -51,15 +51,16 @@ SUBSTITUTION_ALPHABET = "013457@€!°$+"
 #: Shortest all-glyph token that can be read as a substituted word at all.
 #: Three would swallow "555" and "240"; four is past the common short numbers
 #: while still catching a five-letter word substituted end to end.
-MIN_OBFUSCATED_TOKEN = 4
+MIN_GLYPH_WORD = 4
 
-#: What share of a text's whitespace tokens must be all-glyph before any
-#: all-glyph token is read as substituted rather than as a number. Length
-#: alone cannot separate the two -- "4557" is a valid ticket number and a
-#: valid substitution of "asst" -- but their surroundings can: a substituted
-#: passage is mostly all-glyph tokens, whereas an identifier, an amount or an
-#: extension is one token among many words.
-MIN_ALL_GLYPH_SHARE = 1 / 3
+#: The glyphs that are digits. A token built only from these is a number as
+#: readily as it is a substituted word -- "4557" is a ticket number and a
+#: substitution of "asst", "45537" is a five-digit identifier and a
+#: substitution of "asset" -- so no character-class rule can separate them.
+#: An all-glyph token therefore has to carry at least one symbol glyph, which
+#: no ordinary identifier does, before it counts as a substituted word. See
+#: `_is_glyph_word` for what that concedes.
+SUBSTITUTION_DIGITS = "013457"
 
 #: Window and threshold for the substitution-density test: within any run of
 #: twelve consecutive word-position characters, at least a quarter must be
@@ -128,30 +129,48 @@ def _strip_edges(token: str) -> str:
     return token[start:end]
 
 
-def _is_all_glyph(token: str) -> bool:
-    """True for a token long enough to be a word and made only of glyphs."""
-    return len(token) >= MIN_OBFUSCATED_TOKEN and all(
-        char in SUBSTITUTION_ALPHABET for char in token
+def _is_glyph_word(token: str) -> bool:
+    """True for a token that can only be read as a word spelled in glyphs.
+
+    Long enough to be a word, made only of glyphs, and carrying a symbol glyph
+    somewhere other than its first or last character. The symbol requirement
+    keeps ordinary identifiers out: a ticket number, a lot number, a zip code,
+    a card number and an extension are all digits, so none of them reach this.
+    Requiring the symbol to be interior handles the half of the glyph set that
+    is also punctuation -- a trailing "!" on "4557!" is an exclamation mark,
+    not a substituted letter, and `_strip_edges` cannot remove it without
+    destroying payloads like "+h!$" that legitimately end in one.
+
+    What it concedes, deliberately: a payload substituted entirely into
+    digits -- "45537" for "asset" -- is not recognised. That is not an
+    oversight but the honest end of a character-class rule. "45537" and the
+    ticket number "4557" have the same shape, and every rule tried against
+    them traded one error for the other: keying on token length flagged zip
+    codes and order numbers, and keying on how many all-glyph tokens the text
+    held flagged comma-separated serial lists while letting a payload escape
+    behind seven words of wrapper. Separating them needs a dictionary check on
+    the de-leeted token, which is semantic work and belongs to the
+    canonicalizer this baseline exists to be compared against -- so the miss
+    is recorded here and pinned by a test rather than papered over.
+    """
+    return (
+        len(token) >= MIN_GLYPH_WORD
+        and all(char in SUBSTITUTION_ALPHABET for char in token)
+        and any(char not in SUBSTITUTION_DIGITS for char in token[1:-1])
     )
 
 
 def _obfuscated(tokens: list[str]) -> list[bool]:
-    """Which tokens may carry replaced letters, judged in context.
+    """Which tokens may carry replaced letters.
 
-    A token keeping at least one letter qualifies on its own: leetspeak beside
-    a surviving letter is unambiguous. A token made only of glyphs is
-    ambiguous by construction -- "4557" is both a ticket number and a
-    substitution of "asst" -- so it qualifies only when all-glyph tokens make
-    up at least `MIN_ALL_GLYPH_SHARE` of the text. That is the shape of a
-    fully substituted passage, and not the shape of an identifier sitting in
-    ordinary prose.
+    A token keeping at least one letter qualifies: leetspeak beside a
+    surviving letter is unambiguous. A token that kept no letter qualifies
+    only on `_is_glyph_word`'s terms. Both tests are local to the token, so a
+    payload is seen the same whether it stands alone or sits inside a long
+    ordinary wrapper -- which is how the benchmark presents it, and what
+    `_has_substitution_density` promises.
     """
-    all_glyph = [_is_all_glyph(token) for token in tokens]
-    substituted_passage = bool(tokens) and sum(all_glyph) / len(tokens) >= MIN_ALL_GLYPH_SHARE
-    return [
-        any(char.isalpha() for char in token) or (glyph and substituted_passage)
-        for token, glyph in zip(tokens, all_glyph, strict=True)
-    ]
+    return [any(char.isalpha() for char in token) or _is_glyph_word(token) for token in tokens]
 
 
 def _replacement_flags(text: str) -> list[int]:
