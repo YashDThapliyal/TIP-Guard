@@ -658,3 +658,15 @@ def test_a_run_completed_before_the_retry_is_refused_not_claimed(
         run_dir_module.reserve_run_dir(run_dir)
     assert (run_dir / "results.jsonl").read_text(encoding="utf-8") == "someone else's results"
     assert not (run_dir / RUN_OWNER_MARKER).exists()
+
+
+def test_the_run_directory_constants_keep_their_runner_import_path() -> None:
+    # They moved to `evaluation.run_dir` when the lifecycle was split out.
+    # Moving them is an internal reorganisation and must not break anyone
+    # importing them from where they used to live.
+    import tipguard.evaluation.runner as reimported
+
+    assert reimported.RUN_ARTIFACTS is RUN_ARTIFACTS
+    assert reimported.RUN_COMPLETE_MARKER is RUN_COMPLETE_MARKER
+    assert reimported.RUN_OWNER_MARKER is RUN_OWNER_MARKER
+    assert {"RUN_ARTIFACTS", "RUN_COMPLETE_MARKER", "RUN_OWNER_MARKER"} <= set(reimported.__all__)

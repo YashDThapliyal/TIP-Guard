@@ -17,7 +17,14 @@ from tipguard.benchmark.validate import validate_cases
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig, ModelsConfig, PoliciesConfig
 from tipguard.evaluation.case import _answer_correct, evaluate_case
-from tipguard.evaluation.run_dir import mark_complete, release_run_dir, reserve_run_dir
+from tipguard.evaluation.run_dir import (
+    RUN_ARTIFACTS,
+    RUN_COMPLETE_MARKER,
+    RUN_OWNER_MARKER,
+    mark_complete,
+    release_run_dir,
+    reserve_run_dir,
+)
 from tipguard.evaluation.summary import CaseRecord, RunSummary, summarize
 from tipguard.guardrail.factory import build_guardrail
 from tipguard.logging import get_logger, redacting
@@ -26,7 +33,19 @@ from tipguard.models.registry import ProviderRegistry
 from tipguard.run_id import config_hash, make_run_id
 from tipguard.seeding import seed_everything
 
-__all__ = ["OUTPUT_DIR_ENV", "RunArtifacts", "_answer_correct", "evaluate_case", "run_experiment"]
+# The three RUN_* constants live in `evaluation.run_dir` now, and are
+# re-exported here so the import path they had before that split keeps
+# working.
+__all__ = [
+    "OUTPUT_DIR_ENV",
+    "RUN_ARTIFACTS",
+    "RUN_COMPLETE_MARKER",
+    "RUN_OWNER_MARKER",
+    "RunArtifacts",
+    "_answer_correct",
+    "evaluate_case",
+    "run_experiment",
+]
 
 OUTPUT_DIR_ENV = "TIPGUARD_OUTPUT_DIR"
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
