@@ -618,33 +618,43 @@ def _best_letters_decode(paragraph: str) -> tuple[Family, float] | None:
     return Family.REVERSE, reversed_rate
 
 
-#: The labels a wrapper actually uses to introduce a payload. A closed list,
-#: not a shape.
-#:
-#: Shape rules kept eating real ciphertext. "Any leading token with interior
-#: punctuation" ate a payload opening "3.14" and any shifted word containing
-#: a full stop. Narrowing to "single letters separated by full stops" still
-#: ate a shifted "U.S.", because that is exactly the shape a label has.
-#:
-#: A closed list ends it, because these are *English* markers and ciphertext
-#: is not: a caesar shift maps "U.S." to "H.F." and never back to "P.S."
-#: unless the shift is zero. The residue is a plaintext abbreviation that
-#: happens to shift into one of these, which is rare, bounded to one token,
-#: and far cheaper than truncating every payload opening with an
-#: abbreviation.
-_PROSE_MARKERS = frozenset({"p.s.", "n.b.", "p.p.s.", "e.g.", "i.e.", "nb.", "ps."})
-
 #: Below this many characters, a span is too short to give a token away: the
 #: marker may well be the payload.
 _MIN_PAYLOAD_CHARS = 12
 
 
-def _is_prose_marker(token: str) -> bool:
-    """Whether `token` is a wrapper's own label rather than payload."""
-    return token.lower() in _PROSE_MARKERS
+def _is_prose_marker(token: str, alphabet: str) -> bool:
+    """Whether `token` provably cannot belong to a payload over `alphabet`.
+
+    Proof, not a guess. Three heuristics in a row deleted real ciphertext
+    here: "any token with interior punctuation" ate a payload opening
+    "3.14"; "single letters separated by full stops" ate a shifted "U.S.",
+    which has exactly that shape; and a closed list of English labels still
+    ate a plaintext abbreviation that happened to shift into one of them.
+    Every shape rule fails for the same reason -- a label and a fragment of
+    ciphertext can look identical.
+
+    What cannot look identical is a character the alphabet does not contain.
+    Base64 has no full stop; morse is dots, dashes and slashes with no
+    letters. A token carrying a character outside the payload's own alphabet
+    was never payload, and stripping it is safe by construction.
+
+    Caesar and reverse have no such guarantee: they preserve punctuation, so
+    "P.S." is a legitimate ciphertext token. They therefore pass an empty
+    alphabet, nothing is ever stripped, and their decode carries the label
+    through as a harmless prefix. Leaving four characters of noise on a
+    correct decode is cheap; deleting a payload's first word is not.
+    """
+    return bool(alphabet) and any(char not in alphabet for char in token)
 
 
-def _strip_prose_marker(span: str) -> str:
+#: What each family's payload may contain. Empty means "no guarantee", so
+#: nothing is stripped for that family.
+BASE64_ALPHABET = string.ascii_letters + string.digits + "+/="
+MORSE_ALPHABET = ".-/ "
+
+
+def _strip_prose_marker(span: str, alphabet: str = "") -> str:
     """`span` without a leading prose marker such as "P.S.".
 
     A caesar or reverse payload is pure letters and spaces -- the encoders
@@ -661,7 +671,7 @@ def _strip_prose_marker(span: str) -> str:
     # indistinguishable from a label -- so the rule is bounded rather than
     # made cleverer: the cost of a wrong strip is one short token, never a
     # truncated or empty payload.
-    if len(tokens) < 2 or not _is_prose_marker(tokens[0]):
+    if len(tokens) < 2 or not _is_prose_marker(tokens[0], alphabet):
         return span
     remainder = " ".join(tokens[1:])
     # Measured in characters, not tokens: a base64 payload is one long token,
@@ -684,7 +694,7 @@ def letters_payload(text: str) -> str | None:
     """
     named = bool(CAESAR_WORDS.search(text)) != bool(REVERSE_WORDS.search(text))
     candidate = _lowest_hit_paragraph(text, NAMED_CIPHER_MIN_TOKENS if named else MIN_LETTER_TOKENS)
-    return _strip_prose_marker(candidate[0]) if candidate is not None else None
+    return candidate[0] if candidate is not None else None
 
 
 def _resolve_letters_family(text: str) -> LettersResolution | None:
@@ -782,7 +792,10 @@ def _extract_base64(text: str) -> str | None:
     does, but is not impossible for a short one); the longest is preferred,
     matching the extraction rule the brief states for the canonicalizer.
     """
-    runs = (match.group() for match in BASE64_CANDIDATE.finditer(text))
+    runs = (
+        match.group()
+        for match in BASE64_CANDIDATE.finditer(_strip_prose_marker(text, BASE64_ALPHABET))
+    )
     for candidate in sorted(runs, key=len, reverse=True):
         if _try_base64_decode(candidate) is not None:
             return candidate
@@ -803,7 +816,7 @@ def _extract_morse(text: str) -> str | None:
     for paragraph in _paragraphs(text):
         if not MORSE_RUN.search(paragraph):
             continue
-        paragraph = _strip_prose_marker(paragraph)
+        paragraph = _strip_prose_marker(paragraph, MORSE_ALPHABET)
         compact = paragraph.replace(" ", "")
         if not compact:
             continue

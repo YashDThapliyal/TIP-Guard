@@ -299,18 +299,20 @@ def test_a_marker_rule_does_not_truncate_real_ciphertext(span: str) -> None:
     assert _strip_prose_marker(span) == span
 
 
-@pytest.mark.parametrize(
-    ("span", "expected"),
-    [
-        ("P.S. Gur cevagre jbexf ntnva abj", "Gur cevagre jbexf ntnva abj"),
-        ("N.B. gur zrffntr sbyybjf urer", "gur zrffntr sbyybjf urer"),
-    ],
-)
-def test_a_real_marker_is_stripped(span: str, expected: str) -> None:
-    assert _strip_prose_marker(span) == expected
+def test_a_marker_is_stripped_only_where_the_alphabet_proves_it_is_not_payload() -> None:
+    # Base64 has no full stop and morse has no letters, so a token carrying
+    # one was provably never payload. Caesar and reverse preserve
+    # punctuation, so "P.S." is a legitimate ciphertext token there and
+    # nothing is stripped -- the label rides through as a harmless prefix.
+    from tipguard.canonicalization.detector import BASE64_ALPHABET, MORSE_ALPHABET
+
+    assert _strip_prose_marker("P.S. .-- .... .- -", MORSE_ALPHABET) == ".-- .... .- -"
+    assert _strip_prose_marker("P.S. V2hhdCBpcyB0aGU=", BASE64_ALPHABET) == "V2hhdCBpcyB0aGU="
+    assert _strip_prose_marker("P.S. Gur cevagre jbexf") == "P.S. Gur cevagre jbexf"
 
 
 def test_a_marker_is_kept_when_nothing_substantial_remains() -> None:
-    # An abbreviation is indistinguishable from a label, so the rule is
-    # bounded rather than made cleverer: never strip the payload away.
-    assert _strip_prose_marker("P.S. abj") == "P.S. abj"
+    from tipguard.canonicalization.detector import MORSE_ALPHABET
+
+    # Never strip the payload away, whatever the alphabet says.
+    assert _strip_prose_marker("P.S. .--", MORSE_ALPHABET) == "P.S. .--"
