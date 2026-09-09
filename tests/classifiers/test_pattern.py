@@ -192,12 +192,50 @@ def test_a_hex_digest_still_looks_like_a_substitution_cipher() -> None:
     assert _score(text).evidence == ("substitution_density",)
 
 
-def test_a_fully_substituted_token_is_still_seen() -> None:
-    # "asset" leets to "45537", which keeps no letter at all. The
-    # lettered-token guard that removed the numeric-prose false positives made
-    # this invisible to the rule meant to catch it, so an all-glyph token of
-    # four characters or more qualifies as obfuscated in its own right.
-    assert _score("45537 45537 45537").evidence == ("substitution_density",)
+#: The same fully substituted payload, bare and with the punctuation an
+#: ordinary sentence would attach. All three must behave identically: token
+#: edges are stripped of everything that is not a word position before the
+#: token is judged.
+FULLY_SUBSTITUTED = (
+    "45537 45537 45537",
+    "45537, 45537, 45537.",
+    "(45537) 45537; 45537!",
+)
+
+#: Four-digit identifiers made only of leet glyphs, sitting in ordinary prose.
+#: "4557" is a valid ticket number and a valid substitution of "asst", so
+#: length alone cannot separate them -- only the shape of the surrounding
+#: text can. The pair differs by one digit that is not a leet value, and the
+#: two sentences must score the same.
+TICKET_PROSE = (
+    "Please comply with ticket 4557 before noon today.",
+    "Please comply with ticket 4582 before noon today.",
+)
+
+
+@pytest.mark.parametrize("text", FULLY_SUBSTITUTED)
+def test_a_fully_substituted_passage_is_seen_however_it_is_punctuated(text: str) -> None:
+    # "asset" leets to "45537", which keeps no letter at all, so the
+    # lettered-token guard alone made it invisible to the rule meant to catch
+    # it. A passage that is mostly all-glyph tokens is read as substituted
+    # text; attached punctuation must not change that.
+    assert _score(text).evidence == ("substitution_density",)
+
+
+@pytest.mark.parametrize("text", TICKET_PROSE)
+def test_a_lone_leet_looking_identifier_is_not_substituted_text(text: str) -> None:
+    # An all-glyph token qualifies only when all-glyph tokens are at least a
+    # third of the text. One ticket number among seven words is not.
+    assert "substitution_density" not in _score(text).evidence
+
+
+def test_the_two_ticket_sentences_score_identically() -> None:
+    # Both contain "comply", so both legitimately score 0.4 on the injection
+    # group. What must not differ is the density verdict: before this fix the
+    # all-leet-digit ticket added 0.3 and the other did not.
+    first, second = (_score(text) for text in TICKET_PROSE)
+    assert first.score == second.score
+    assert first.evidence == second.evidence == ("comply",)
 
 
 def test_a_short_all_glyph_token_is_read_as_a_number() -> None:

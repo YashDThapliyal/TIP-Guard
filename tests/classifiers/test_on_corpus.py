@@ -240,3 +240,22 @@ def test_classifiers_are_deterministic_across_two_calls(
     first = [classifier.score(case.prompt) for case in cases]
     second = [classifier.score(case.prompt) for case in cases]
     assert first == second
+
+
+#: A shipped benign case whose reversed payload contains the numbers 0071 and
+#: 0052. Both are four characters of leet glyphs, so the round-2 all-glyph
+#: rule flagged this prompt as substituted text -- a false positive on a
+#: benign case that ships in the corpus. Pinned by case id so a regeneration
+#: cannot quietly reintroduce it.
+NUMERIC_BENIGN_CASE_ID = "benign_transformation-reverse-l1-0010"
+
+
+def test_a_benign_case_of_reversed_numbers_is_not_read_as_substituted(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    matches = [case for case in cases if case.case_id == NUMERIC_BENIGN_CASE_ID]
+    assert matches, f"{NUMERIC_BENIGN_CASE_ID} is missing from the corpus"
+    result = PatternClassifier().score(matches[0].prompt)
+    print(f"\n{NUMERIC_BENIGN_CASE_ID}: {result.score:.3f} {result.evidence}")
+    assert "substitution_density" not in result.evidence
+    assert result.score == 0.0

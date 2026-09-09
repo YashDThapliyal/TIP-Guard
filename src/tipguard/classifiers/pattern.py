@@ -48,10 +48,18 @@ SUBSTITUTION_SYMBOLS = "@€!°$+#%&*"
 #: benchmark's, which catches drift without creating the coupling.
 SUBSTITUTION_ALPHABET = "013457@€!°$+"
 
-#: Shortest all-glyph token treated as obfuscated rather than as a number.
+#: Shortest all-glyph token that can be read as a substituted word at all.
 #: Three would swallow "555" and "240"; four is past the common short numbers
 #: while still catching a five-letter word substituted end to end.
 MIN_OBFUSCATED_TOKEN = 4
+
+#: What share of a text's whitespace tokens must be all-glyph before any
+#: all-glyph token is read as substituted rather than as a number. Length
+#: alone cannot separate the two -- "4557" is a valid ticket number and a
+#: valid substitution of "asst" -- but their surroundings can: a substituted
+#: passage is mostly all-glyph tokens, whereas an identifier, an amount or an
+#: extension is one token among many words.
+MIN_ALL_GLYPH_SHARE = 1 / 3
 
 #: Window and threshold for the substitution-density test: within any run of
 #: twelve consecutive word-position characters, at least a quarter must be
@@ -101,41 +109,71 @@ def _is_word_position(char: str) -> bool:
     return char.isalnum() or char in SUBSTITUTION_SYMBOLS
 
 
-def _is_obfuscated_token(token: str) -> bool:
-    """True if a non-alphabetic character in `token` may be a replaced letter.
+def _strip_edges(token: str) -> str:
+    """`token` without its leading and trailing non-word-position characters.
 
-    A token keeping at least one letter qualifies. So does one made entirely
-    of substitution glyphs, provided it is long enough not to be an ordinary
-    short number: "asset" leets to "45537", which retains no letter at all and
-    would otherwise be invisible to the very rule meant to catch it.
+    `str.strip(string.punctuation)` cannot be used here: half the substitution
+    glyphs (`@ $ + ! %`) are themselves punctuation, and stripping them would
+    destroy the tokens this exists to preserve. Word positions are kept and
+    everything else at the edges goes, so "45537," and "(45537)" are tested as
+    "45537" while "+h!$" is left exactly as it is. Without this, a fully
+    substituted word stopped being recognised the moment a sentence put a
+    comma after it.
     """
-    if any(char.isalpha() for char in token):
-        return True
+    start, end = 0, len(token)
+    while start < end and not _is_word_position(token[start]):
+        start += 1
+    while end > start and not _is_word_position(token[end - 1]):
+        end -= 1
+    return token[start:end]
+
+
+def _is_all_glyph(token: str) -> bool:
+    """True for a token long enough to be a word and made only of glyphs."""
     return len(token) >= MIN_OBFUSCATED_TOKEN and all(
         char in SUBSTITUTION_ALPHABET for char in token
     )
+
+
+def _obfuscated(tokens: list[str]) -> list[bool]:
+    """Which tokens may carry replaced letters, judged in context.
+
+    A token keeping at least one letter qualifies on its own: leetspeak beside
+    a surviving letter is unambiguous. A token made only of glyphs is
+    ambiguous by construction -- "4557" is both a ticket number and a
+    substitution of "asst" -- so it qualifies only when all-glyph tokens make
+    up at least `MIN_ALL_GLYPH_SHARE` of the text. That is the shape of a
+    fully substituted passage, and not the shape of an identifier sitting in
+    ordinary prose.
+    """
+    all_glyph = [_is_all_glyph(token) for token in tokens]
+    substituted_passage = bool(tokens) and sum(all_glyph) / len(tokens) >= MIN_ALL_GLYPH_SHARE
+    return [
+        any(char.isalpha() for char in token) or (glyph and substituted_passage)
+        for token, glyph in zip(tokens, all_glyph, strict=True)
+    ]
 
 
 def _replacement_flags(text: str) -> list[int]:
     """One flag per word-position character: 1 where a letter looks replaced.
 
     A non-alphabetic character counts as a replacement only inside a token
-    that looks obfuscated in its own right. Without that guard the rule fires
-    on any prose carrying a date, a price, a version number or a phone number:
-    collapsing whitespace lets a purely numeric token supply the density for a
-    window made otherwise of ordinary words.
+    `_obfuscated` accepts. Without that guard the rule fires on any prose
+    carrying a date, a price, a version number or a phone number: collapsing
+    whitespace lets a purely numeric token supply the density for a window
+    made otherwise of ordinary words.
 
     The trade is a deliberate one, and it is an evasion, not a property of
     leetspeak: an attacker who spaces the substituted characters into tokens
     of their own -- "Th 3 v 4 ult" -- leaves every token either lettered with
-    no glyphs or too short to qualify, and the score drops to zero.
-    Removing the prose false positives is worth that, since the prose case
-    fires by accident on ordinary traffic while the evasion has to be
-    constructed. It is pinned by a test rather than left to be rediscovered.
+    no glyphs or too short to qualify, and the score drops to zero. Removing
+    the prose false positives is worth that, since the prose case fires by
+    accident on ordinary traffic while the evasion has to be constructed. It
+    is pinned by a test rather than left to be rediscovered.
     """
+    tokens = [_strip_edges(token) for token in text.split()]
     flags: list[int] = []
-    for token in text.split():
-        obfuscated = _is_obfuscated_token(token)
+    for token, obfuscated in zip(tokens, _obfuscated(tokens), strict=True):
         flags.extend(
             0 if char.isalpha() or not obfuscated else 1
             for char in token
