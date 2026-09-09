@@ -210,3 +210,84 @@ def test_a_rejected_snippet_never_carries_the_snippet_into_the_reason() -> None:
     assert analysis.rejected_reason is not None
     assert secret not in analysis.rejected_reason
     assert secret not in json.dumps(analysis.model_dump())
+
+
+def test_list_growth_is_bounded_like_string_growth() -> None:
+    """A list is as cheap to write and as expensive to hold as a string.
+
+    Only strings were capped at first, so a chain of list concatenations
+    doubled its way to 213 MB before the step budget noticed -- twenty-one
+    doublings is twenty-one steps, and each allocates rather than looping.
+    Measured rather than asserted structurally, because the defect was
+    invisible to every structural test.
+    """
+    import tracemalloc
+
+    source = (
+        'a0 = ["x","y","z","w"]\n'
+        + "".join(f"a{i} = a{i - 1} + a{i - 1}\n" for i in range(1, 22))
+        + 'msg = "".join(a21)'
+    )
+    tracemalloc.start()
+    try:
+        analysis = _analyze(source)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert analysis.rejected_reason == BUDGET_EXCEEDED
+    assert peak < 20_000_000, f"allocated {peak / 1e6:.0f} MB before refusing"
+
+
+#: Every argument-shape refusal, one case each. Uncovered lines in a module
+#: whose job is refusing things are untested refusals, which is the one kind
+#: of dead code that matters here: a rejection path that has never run is a
+#: rejection path that might not reject.
+MALFORMED_CALLS = (
+    ('msg = "".join()', "join expects one sequence"),
+    ('msg = "".join("ab", "cd")', "join expects one sequence"),
+    ('msg = "".join("notalist")', "join expects one sequence"),
+    ('msg = "a".replace("a")', "replace expects two arguments"),
+    ('msg = "a".replace("a", "b", "c")', "replace expects two arguments"),
+    ("msg = chr()", "chr expects one argument"),
+    ('msg = chr("a")', "chr expects an integer"),
+    # A bool never reaches chr: it is refused as a constant first.
+    ("msg = chr(True)", "only string and integer constants"),
+    ("msg = ord()", "ord expects one argument"),
+    ("msg = ord(1)", "ord expects a string"),
+    ('msg = ord("ab")', "ord expects one character"),
+    ("msg = reversed()", "reversed expects one argument"),
+    ("msg = reversed(1)", "reversed expects a string or sequence"),
+    ('msg = "a".upper("x")', "upper expects no arguments"),
+    ('msg = "a b".split("x", "y")', "split expects at most one argument"),
+    ('msg = "a b".split("")', "split on an empty separator"),
+    ('msg = "a".upper(x=1)', "keyword arguments"),
+    ('msg = [c for c in "ab" for d in "cd"]', "only one generator"),
+    ('msg = [c for (c, d) in ["ab"]]', "only a plain loop variable"),
+    ("msg = [c for c in 1]", "comprehension over an unsupported value"),
+    ('msg = 1 + "a"', "addition of unsupported types"),
+    ('msg = "a"()', "call to a computed value"),
+)
+
+
+@pytest.mark.parametrize(("source", "reason"), MALFORMED_CALLS)
+def test_every_argument_shape_refusal_is_reachable(source: str, reason: str) -> None:
+    analysis = _analyze(source)
+    assert analysis.result is None
+    assert analysis.rejected_reason == reason
+
+
+def test_a_deeply_nested_expression_is_refused_rather_than_crashing() -> None:
+    # The walk is recursive, so a nested expression can exhaust Python's own
+    # stack before the step budget notices. That is an unsupported snippet,
+    # not a crash the caller has to handle.
+    analysis = _analyze('msg = "a"' + ' + "a"' * 200 + "\n")
+    assert analysis.result is not None or analysis.rejected_reason
+
+
+def test_unparseable_source_is_a_reason_not_an_exception() -> None:
+    assert _analyze("msg = (((").rejected_reason == "not parseable as Python"
+
+
+def test_a_snippet_may_end_in_a_bare_expression() -> None:
+    # The generator assigns to `msg`, but a defence cannot assume that shape.
+    assert _analyze('"".join(["a", "b"])').result == "ab"

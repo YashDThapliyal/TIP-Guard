@@ -86,6 +86,19 @@ class _Budget:
             raise UnsupportedCodeError(BUDGET_EXCEEDED)
         return value
 
+    @staticmethod
+    def check_sequence(value: list[object]) -> list[object]:
+        """Bound a list the way a string is bounded.
+
+        Only strings were capped, so a chain of list concatenations doubled
+        its way to 213 MB before the step budget noticed: twenty-one
+        doublings is twenty-one steps, and each one allocates rather than
+        looping. A list is as cheap to write and as expensive to hold.
+        """
+        if len(value) > MAX_ITERATIONS:
+            raise UnsupportedCodeError(BUDGET_EXCEEDED)
+        return value
+
 
 def _require_str(value: object, what: str) -> str:
     if not isinstance(value, str):
@@ -293,7 +306,9 @@ class RestrictedCodeAnalyzer:
                 raise UnsupportedCodeError(f"unknown name {node.id!r}")
             return scope[node.id]
         if isinstance(node, (ast.List, ast.Tuple)):
-            return [self._expression(item, scope, budget, operations) for item in node.elts]
+            return _Budget.check_sequence(
+                [self._expression(item, scope, budget, operations) for item in node.elts]
+            )
         if isinstance(node, ast.BinOp):
             return self._binop(node, scope, budget, operations)
         if isinstance(node, ast.Call):
@@ -319,6 +334,10 @@ class RestrictedCodeAnalyzer:
         if isinstance(left, str) and isinstance(right, str):
             return _Budget.check_string(left + right)
         if isinstance(left, list) and isinstance(right, list):
+            if len(left) + len(right) > MAX_ITERATIONS:
+                # Checked before the concatenation, not after: the point is
+                # not to allocate the oversized value in the first place.
+                raise UnsupportedCodeError(BUDGET_EXCEEDED)
             return [*left, *right]
         raise UnsupportedCodeError("addition of unsupported types")
 
@@ -374,7 +393,7 @@ class RestrictedCodeAnalyzer:
         for item in items:
             inner = {**scope, generator.target.id: item}
             results.append(self._expression(node.elt, inner, budget, operations))
-        return results
+        return _Budget.check_sequence(results)
 
     @staticmethod
     def _iterable(source: object) -> list[object]:
