@@ -44,6 +44,31 @@ def test_an_escaped_quote_inside_a_string_does_not_end_it_early() -> None:
     }
 
 
+def test_resumes_scanning_past_a_brace_pair_that_is_not_valid_json() -> None:
+    # The model described the shape in prose before producing it, and the
+    # prose's own brace pair is not valid JSON (bare, unquoted keys). The
+    # scan must not give up there; it should move on to the real object.
+    text = (
+        "I will use the shape {risk, categories} - here it is: "
+        '{"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    )
+    assert parse_json_object(text) == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+
+
+def test_resumes_scanning_past_an_opening_brace_with_no_matching_close() -> None:
+    text = '{"a": 1 no closing here {"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    assert parse_json_object(text) == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+
+
+def test_a_deeply_nested_candidate_does_not_raise_recursionerror() -> None:
+    # Deep enough to overflow json.loads's recursion handling regardless of
+    # the interpreter's own recursion limit (empirically well above it).
+    inner = "1"
+    for _ in range(20_000):
+        inner = f'{{"a":{inner}}}'
+    assert parse_json_object(inner) is None
+
+
 def test_returns_none_for_text_with_no_object() -> None:
     assert parse_json_object("I refuse to answer.") is None
 
