@@ -2,6 +2,8 @@
 
 import json
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from tipguard.logging import configure_logging, get_logger, redact, redacting
 
@@ -91,15 +93,14 @@ def test_get_logger_attaches_one_redacting_filter() -> None:
 
 def test_redacting_is_inert_outside_a_block() -> None:
     log = get_logger("inert")
-    captured = _capture(log)
-    log.info("SECRET-1 stays", extra={"note": "SECRET-1"})
+    with _capture(log) as captured:
+        log.info("SECRET-1 stays", extra={"note": "SECRET-1"})
     assert captured[0].note == "SECRET-1"  # type: ignore[attr-defined]
 
 
 def test_redacting_hides_values_from_message_args_and_extras() -> None:
     log = get_logger("scoped-capture")
-    captured = _capture(log)
-    with redacting(["SECRET-1"]):
+    with _capture(log) as captured, redacting(["SECRET-1"]):
         log.info("saw SECRET-1 in %s", "a SECRET-1 body", extra={"note": "SECRET-1 here"})
     assert "SECRET-1" not in captured[0].getMessage()
     assert captured[0].note == "[REDACTED] here"  # type: ignore[attr-defined]
@@ -110,16 +111,14 @@ def test_redacting_covers_a_sibling_logger_not_only_the_caller_s() -> None:
     # filters are not consulted for records propagating from a descendant,
     # and `tipguard.models` is where the provider-failure text is emitted.
     sibling = get_logger("some-other-module")
-    captured = _capture(sibling)
-    with redacting(["SECRET-1"]):
+    with _capture(sibling) as captured, redacting(["SECRET-1"]):
         sibling.info("upstream said SECRET-1")
     assert "SECRET-1" not in captured[0].getMessage()
 
 
 def test_redacting_blocks_nest_and_each_undoes_only_itself() -> None:
     log = get_logger("nested")
-    captured = _capture(log)
-    with redacting(["SECRET-1"]):
+    with _capture(log) as captured, redacting(["SECRET-1"]):
         with redacting(["SECRET-2"]):
             log.info("SECRET-1 and SECRET-2")
         log.info("SECRET-1 and SECRET-2")
@@ -129,17 +128,22 @@ def test_redacting_blocks_nest_and_each_undoes_only_itself() -> None:
 
 def test_redacting_with_no_values_is_a_no_op() -> None:
     log = get_logger("empty-values")
-    captured = _capture(log)
-    with redacting([]):
+    with _capture(log) as captured, redacting([]):
         log.info("SECRET-1")
     assert captured[0].getMessage() == "SECRET-1"
 
 
-def _capture(log: logging.Logger) -> list[logging.LogRecord]:
-    """Collect records emitted on `log`, restoring its state after the test."""
+@contextmanager
+def _capture(log: logging.Logger) -> Iterator[list[logging.LogRecord]]:
+    """Collect records emitted on `log`, restoring its handlers and level."""
     captured: list[logging.LogRecord] = []
     handler = logging.Handler()
     handler.emit = captured.append  # type: ignore[method-assign]
+    previous = log.level
     log.addHandler(handler)
     log.setLevel(logging.INFO)
-    return captured
+    try:
+        yield captured
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(previous)

@@ -40,8 +40,9 @@ returns carries a redacting filter that is live for the duration of a `redacting
 the `tipguard` package logger because a logger's filters are not consulted for records
 propagating up from a descendant; on the package logger it would miss `tipguard.models`, whose
 provider-failure debug line is the one record documented as able to quote a request body. So a
-library caller that never configures logging still gets redacted records in its own handlers. Result files under `reports/runs/` may contain
-raw model output, so that directory is git-ignored and is never committed or attached to an issue.
+library caller that never configures logging still gets redacted records in its own handlers.
+Result files under `reports/runs/` may contain raw model output, so that directory is git-ignored
+and is never committed or attached to an issue.
 When a request is blocked, the stored `response_text` is the refusal only, so blocked cases never
 persist a reconstructed secret. Dashboards and reports display decisions and reasons, not
 protected values.
