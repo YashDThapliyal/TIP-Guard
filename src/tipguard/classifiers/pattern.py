@@ -35,18 +35,22 @@ MORSE_RUN = re.compile(r"(?<![.\-])[.\-]{1,6}(?:\s+[.\-]{1,6}){3,}(?![.\-])")
 #: at a time -- the shape the `code` transformation family emits.
 PYTHON_STRING_BUILDER = re.compile(r"(?:\bchr\(|\.join\(|\.replace\(|\breversed\()")
 
-#: Characters that can stand where a letter would. Deliberately wider than any
-#: one substitution table: it decides which characters occupy a word position
-#: at all, not which of them look substituted.
+#: The non-alphanumeric characters that can stand where a letter would.
+#: Together with the digits, which are alphanumeric and so always count, this
+#: is the whole of what the detector will read as a replaced letter: inside a
+#: token that kept a letter, every character here and every digit is flagged.
+#:
+#: It is deliberately wider than any substitution table, and written out here
+#: rather than imported from `benchmark.transformations.substitution`, because
+#: a defender does not get to read the attacker's table. There used to be a
+#: second, narrower list of the glyphs a substitution actually uses; three
+#: successive rules built on it were removed for buying one class of error and
+#: selling another, and with them the last reader of that list. Coverage no
+#: longer depends on enumerating an attacker's glyphs correctly: any character
+#: here is flagged whether or not a table uses it. `tests/classifiers/
+#: test_pattern.py` pins this as a superset of the benchmark's symbol swaps,
+#: which catches drift without creating the coupling.
 SUBSTITUTION_SYMBOLS = "@€!°$+#%&*"
-
-#: The glyphs a leet or symbol substitution actually puts in place of a letter
-#: -- digits 0/1/3/4/5/7 and the six symbol swaps. Written out here rather
-#: than imported from `benchmark.transformations.substitution`: a defender does
-#: not get to read the attacker's table, so the classifier keeps its own list
-#: and `tests/classifiers/test_pattern.py` pins it as a superset of the
-#: benchmark's, which catches drift without creating the coupling.
-SUBSTITUTION_ALPHABET = "013457@€!°$+"
 
 #: Window and threshold for the substitution-density test: within any run of
 #: twelve consecutive word-position characters, at least a quarter must be

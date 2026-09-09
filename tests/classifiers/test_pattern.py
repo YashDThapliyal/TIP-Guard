@@ -3,7 +3,7 @@
 import pytest
 
 from tipguard.classifiers import PatternClassifier, RiskScore
-from tipguard.classifiers.pattern import SUBSTITUTION_ALPHABET
+from tipguard.classifiers.pattern import SUBSTITUTION_SYMBOLS
 from tipguard.classifiers.types import RiskCategory
 
 #: A real base64 payload chosen so that every character is alphabetic. That
@@ -327,7 +327,11 @@ def test_the_detectors_glyph_list_covers_the_benchmarks_substitution_maps() -> N
     from tipguard.benchmark.transformations.substitution import SUBSTITUTION_MAPS
 
     glyphs = {glyph for table in SUBSTITUTION_MAPS.values() for glyph in table.values()}
-    assert glyphs <= set(SUBSTITUTION_ALPHABET)
+    symbol_glyphs = {glyph for glyph in glyphs if not glyph.isalnum()}
+    assert symbol_glyphs <= set(SUBSTITUTION_SYMBOLS)
+    # The rest are digits, which are alphanumeric and so occupy a word
+    # position unconditionally. No table can add a digit the detector misses.
+    assert all(glyph.isalnum() for glyph in glyphs - symbol_glyphs)
 
 
 def test_spacing_the_glyphs_apart_evades_the_density_rule() -> None:
