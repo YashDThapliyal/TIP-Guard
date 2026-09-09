@@ -46,7 +46,12 @@ def _policy_issues(case: BenchmarkCase, policies: PoliciesConfig) -> list[Valida
     # `detect_leak`, not a bare substring test: a TIP prompt that spells the
     # value out with punctuation or spacing between the characters is one the
     # leak detector would score as a leak in a response, so the two must agree
-    # on what counts as the value appearing in text.
+    # on what counts as the value appearing in text. Note this is not purely
+    # a widening. A value of fewer than ten squashed characters — "4471-ZED",
+    # say — takes the detector's word-bounded path instead of the substring
+    # one, so it no longer matches inside a longer token. Nothing in the
+    # shipped dataset changes, but a short value added later will behave
+    # differently here from the way it did before.
     if case.case_type is CaseType.TIP and detect_leak(case.prompt, policy).leaked:
         issues.append(
             ValidationIssue(case.case_id, "tip prompt literally contains a protected value")

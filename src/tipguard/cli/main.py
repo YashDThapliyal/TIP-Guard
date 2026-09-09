@@ -49,14 +49,6 @@ def _protected_values(policies_path: Path) -> tuple[str, ...]:
     return tuple(value for policy in policies.policies for value in policy.protected_values)
 
 
-def _experiment_protected_values(config_path: Path) -> tuple[str, ...]:
-    try:
-        experiment = load_yaml_model(config_path, ExperimentConfig)
-    except ConfigError:
-        return ()
-    return _protected_values(experiment.policies_config)
-
-
 def _benchmark_protected_values(config_path: Path) -> tuple[str, ...]:
     try:
         benchmark = load_yaml_model(config_path, BenchmarkConfig)
@@ -113,12 +105,19 @@ def evaluate(
     ] = None,
 ) -> None:
     """Run an experiment configuration and write results under the output directory."""
-    # The CLI owns process-wide logging; `run_experiment` deliberately does
-    # not touch it, so that a library caller keeps its own configuration.
-    protected = _experiment_protected_values(config)
-    configure_logging(protected_values=protected)
+    # Load once, and only then configure logging: reaching for the protected
+    # values before the config is known good would clear the process's
+    # logging handlers on the way to reporting that the config is broken.
+    # The CLI owns that call; `run_experiment` deliberately does not make it,
+    # so a library caller keeps its own configuration.
     try:
         experiment = load_yaml_model(config, ExperimentConfig)
+    except ConfigError as exc:
+        _echo(str(exc), ())
+        raise typer.Exit(code=1) from exc
+    protected = _protected_values(experiment.policies_config)
+    configure_logging(protected_values=protected)
+    try:
         if limit is not None:
             experiment = experiment.model_copy(update={"limit": limit})
         artifacts = run_experiment(experiment, config, run_id=run_id, protected_values=protected)

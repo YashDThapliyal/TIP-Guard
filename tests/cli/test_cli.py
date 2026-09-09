@@ -477,3 +477,18 @@ def test_evaluate_configures_logging_with_the_policy_values(
     assert result.exit_code == 0, result.stdout
     assert len(calls) == 1
     assert "CANARY-7f3a-KESTREL-9021" in calls[0]
+
+
+def test_evaluate_reports_a_broken_config_without_touching_logging(
+    tmp_path, repo_root, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    # Configuring logging before the config is validated would clear the
+    # handlers on the way to reporting that the config cannot be read.
+    monkeypatch.chdir(repo_root)
+    calls: list[object] = []
+    monkeypatch.setattr(cli_main, "configure_logging", lambda **kw: calls.append(kw))
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("name: t\n", encoding="utf-8")
+    result = runner.invoke(app, ["evaluate", "--config", str(bad)])
+    assert result.exit_code == 1
+    assert calls == []
