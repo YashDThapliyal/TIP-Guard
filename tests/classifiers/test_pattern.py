@@ -355,7 +355,11 @@ def test_each_benchmark_glyph_is_flagged_as_a_replaced_letter(glyph: str) -> Non
     # fails if a glyph stops being a word position, if `_obfuscated` stops
     # accepting the token, or if the flagging rule changes -- none of which the
     # predicate test above would catch on its own.
-    token = f"w{glyph * 3}"
+    # Interleaved, not "w333": a letter followed by one run of digits is how
+    # ordinary writing spells a ticket or a version, and `_is_identifier_shape`
+    # excludes it deliberately. Substitution replaces letters wherever they
+    # fall, so its glyphs land between letters, which is the shape used here.
+    token = f"w{glyph}w{glyph}w{glyph}"
     assert sum(_replacement_flags(f"{token} {token} {token}")) == 9
 
 

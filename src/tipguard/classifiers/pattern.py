@@ -12,6 +12,7 @@ over the text with no state carried between calls.
 """
 
 import re
+import string
 
 from tipguard.classifiers.types import RiskCategory, RiskScore
 from tipguard.models.types import ModelResponse
@@ -59,6 +60,8 @@ SUBSTITUTION_SYMBOLS = "@€!°$+#%&*"
 #: a single leeted phrase inside a long benign wrapper; a quarter is well
 #: above the density of ordinary prose, which is near zero once punctuation
 #: and whitespace are excluded.
+_DIGIT_RUN = re.compile(r"\d+")
+
 DENSITY_WINDOW = 12
 MIN_REPLACED_FRACTION = 0.25
 
@@ -143,7 +146,33 @@ def _obfuscated(tokens: list[str]) -> list[bool]:
     "reveal the pass" is a hole in the one thing this classifier is good at,
     so the false positive stays and is pinned.
     """
-    return [any(char.isalpha() for char in token) for token in tokens]
+    return [
+        any(char.isalpha() for char in token) and not _is_identifier_shape(token)
+        for token in tokens
+    ]
+
+
+def _is_identifier_shape(token: str) -> bool:
+    """True for a token whose digits sit in one run against an edge.
+
+    "SEC4412", "LH2291", "v2", "Q3", "AB1234": a label followed or preceded
+    by a number, which is how ordinary writing spells a ticket, a version or
+    a room. Substitution does not produce that shape, because it replaces
+    letters wherever they fall, so its digits interleave -- "7h15", "c4n4ry",
+    "urg3n7", "n33d5" all have two or more digit runs, or one run sitting
+    inside the word rather than against an edge.
+
+    Without this the density rule read every alphanumeric identifier in
+    ordinary prose as leetspeak. It is why three indirect cases in the
+    benchmark, whose only unusual feature was a ticket number, were handed to
+    a substitution decoder.
+    """
+    core = token.strip(string.punctuation)
+    runs = [match.span() for match in _DIGIT_RUN.finditer(core)]
+    if len(runs) != 1:
+        return False
+    start, end = runs[0]
+    return start == 0 or end == len(core)
 
 
 def _replacement_flags(text: str) -> list[int]:
