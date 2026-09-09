@@ -14,6 +14,7 @@ over the text with no state carried between calls.
 import re
 
 from tipguard.classifiers.types import RiskCategory, RiskScore
+from tipguard.models.types import ModelResponse
 
 #: A contiguous base64-alphabet run. Twenty-four characters is roughly
 #: eighteen bytes of payload, long enough that ordinary prose and identifiers
@@ -224,6 +225,11 @@ def _categories(encodings: int, instructions: int, injections: int) -> tuple[str
 class PatternClassifier:
     """Scores a prompt by the encoding and injection patterns it exhibits."""
 
+    #: This classifier makes no model call, so there is no usage for a
+    #: guard to attribute. Declared to satisfy `RiskClassifier`, which
+    #: requires it so a classifier that *does* call a model cannot omit it
+    #: and vanish from a run's cost and latency columns.
+    last_usage: ModelResponse | None = None
     name = "pattern"
 
     def score(self, text: str) -> RiskScore:

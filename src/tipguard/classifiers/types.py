@@ -13,6 +13,7 @@ from typing import Annotated, Protocol
 from pydantic import Field
 
 from tipguard.base import FrozenModel
+from tipguard.models.types import ModelResponse
 
 
 class RiskCategory(StrEnum):
@@ -69,5 +70,14 @@ class RiskScore(FrozenModel):
 
 class RiskClassifier(Protocol):
     name: str
+
+    #: The response of the model call this classifier's last `score` made, or
+    #: None if it makes none. Guards read it to attribute tokens, cost and
+    #: latency, so a classifier that calls a model and does not expose it
+    #: here vanishes from every operational metric a run reports -- silently,
+    #: since the guards reach it defensively. Declared in the protocol so a
+    #: new classifier that spells it differently is a type error rather than
+    #: a quietly missing column.
+    last_usage: ModelResponse | None
 
     def score(self, text: str) -> RiskScore: ...

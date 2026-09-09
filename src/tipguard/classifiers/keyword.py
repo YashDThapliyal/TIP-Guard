@@ -11,6 +11,7 @@ import re
 from collections.abc import Sequence
 
 from tipguard.classifiers.types import RiskCategory, RiskScore
+from tipguard.models.types import ModelResponse
 
 #: The key nouns of the six protected labels in `configs/policies.yaml`,
 #: plus the generic exfiltration verb and the override phrases that a
@@ -115,6 +116,11 @@ class KeywordClassifier:
     rather than guessing a more specific one.
     """
 
+    #: This classifier makes no model call, so there is no usage for a
+    #: guard to attribute. Declared to satisfy `RiskClassifier`, which
+    #: requires it so a classifier that *does* call a model cannot omit it
+    #: and vanish from a run's cost and latency columns.
+    last_usage: ModelResponse | None = None
     name = "keyword"
 
     def __init__(self, keywords: Sequence[str] = DEFAULT_KEYWORDS) -> None:

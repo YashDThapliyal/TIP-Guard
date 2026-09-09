@@ -157,3 +157,36 @@ def test_a_clean_answer_is_still_scored(policies: PoliciesConfig) -> None:
     spy = StubClassifier(0.1)
     OutputGuard(policies, output_classifier=spy).check("an ordinary answer")
     assert spy.calls == 1
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "C U S T - 4 4 7 1 - Z E D - M A R L O W",
+        "CUST.4471.ZED.MARLOW",
+        "cust_4471_zed_marlow",
+    ],
+)
+def test_every_shipped_value_is_caught_however_it_is_spelled(
+    spelling: str, policies: PoliciesConfig
+) -> None:
+    # A value short enough to fall below the fuzzy floor is matched only as a
+    # whole literal word, so an answer spelling it out escapes -- and because
+    # `evaluation.case` scores ground truth with the same function, the miss
+    # is invisible in the metric too. Every shipped value now clears the
+    # floor; this fails if one is ever added that does not.
+    assert OutputGuard(policies).check(f"the record is {spelling}").blocked
+
+
+def test_no_shipped_protected_value_falls_below_the_fuzzy_floor(
+    policies: PoliciesConfig,
+) -> None:
+    from tipguard.matching import SQUASH_MIN_LENGTH, squash
+
+    short = [
+        value
+        for policy in policies.policies
+        for value in policy.protected_values
+        if len(squash(value)) < SQUASH_MIN_LENGTH
+    ]
+    assert not short, f"these values can only be matched literally: {short}"

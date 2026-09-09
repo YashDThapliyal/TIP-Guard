@@ -7,7 +7,7 @@ from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import ModelsConfig, ModelSpec
 from tipguard.models.anthropic_provider import AnthropicProvider
 from tipguard.models.cache import CachedProvider, ResponseCache
-from tipguard.models.mock import MockProvider
+from tipguard.models.mock import JUDGE_DEFAULT, JUDGE_RULES, MockProvider
 from tipguard.models.ollama_provider import OllamaProvider
 from tipguard.models.openai_provider import OpenAIProvider
 from tipguard.models.types import ModelProvider
@@ -22,6 +22,12 @@ def build_provider(spec: ModelSpec) -> ModelProvider:
     unrecognised name at localhost instead of failing.
     """
     if spec.provider == "mock":
+        if spec.model == "mock-judge":
+            # The judge alias answers in the JSON a risk classifier expects.
+            # A bare mock echoes its prompt, which is a parser failure, and a
+            # guard built on that blocks every case including all benign
+            # traffic -- a degenerate arm rather than a cheap one.
+            return MockProvider(model=spec.model, rules=JUDGE_RULES, default=JUDGE_DEFAULT)
         return MockProvider(model=spec.model)
     if spec.provider == "openai":
         return OpenAIProvider(spec)

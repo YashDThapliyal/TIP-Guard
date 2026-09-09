@@ -148,3 +148,61 @@ def test_usage_totals_add_up_across_every_call_made(policies: PoliciesConfig) ->
     assert result.input_tokens > 0
     assert result.output_tokens > 0
     assert result.latency_ms >= 0.0
+
+
+def test_an_llm_classifiers_own_call_is_counted(policies: PoliciesConfig) -> None:
+    # The brief requires model_calls to be exact at 0, 1 and 2. Only 0 and 1
+    # were covered, because every stub classifier here makes no model call --
+    # so dropping the classifier's usage entirely left the suite green while
+    # every LLM arm under-reported its calls, tokens, cost and latency, which
+    # is what the run's percentiles are computed from.
+    from tipguard.classifiers.llm_risk import LLMRiskClassifier
+
+    judge = MockProvider(default='{"risk": 0.1, "categories": ["none"], "rationale": "fine"}')
+    guard = _guard(
+        input_classifier=LLMRiskClassifier(provider=judge, policies=policies),
+        main_model=MockProvider(default="an ordinary answer"),
+    )
+    result = guard.run("harmless")
+    assert result.decision is Decision.ALLOW
+    # One for the classifier, one for the main model.
+    assert result.model_calls == 2
+    assert result.input_tokens > 0
+    assert result.output_tokens > 0
+
+
+def test_a_blocking_llm_classifier_still_counts_its_own_call(
+    policies: PoliciesConfig,
+) -> None:
+    # The main model is never reached, but the classifier's call was still
+    # paid for and must appear in the totals.
+    from tipguard.classifiers.llm_risk import LLMRiskClassifier
+
+    judge = MockProvider(
+        default='{"risk": 0.9, "categories": ["prompt_injection"], "rationale": "bad"}'
+    )
+    guard = _guard(input_classifier=LLMRiskClassifier(provider=judge, policies=policies))
+    result = guard.run("dangerous")
+    assert result.decision is Decision.BLOCK
+    assert result.model_calls == 1
+    assert result.input_tokens > 0
+
+
+def test_both_llm_stages_are_counted(policies: PoliciesConfig) -> None:
+    from tipguard.classifiers.llm_risk import LLMRiskClassifier
+    from tipguard.guardrail.output_guard import OutputGuard
+
+    def judge(risk: float) -> LLMRiskClassifier:
+        provider = MockProvider(
+            default=f'{{"risk": {risk}, "categories": ["none"], "rationale": "x"}}'
+        )
+        return LLMRiskClassifier(provider=provider, policies=policies)
+
+    guard = _guard(
+        input_classifier=judge(0.1),
+        output_guard=OutputGuard(policies, output_classifier=judge(0.1)),
+    )
+    result = guard.run("harmless")
+    assert result.decision is Decision.ALLOW
+    # Input classifier, main model, output classifier.
+    assert result.model_calls == 3
