@@ -58,9 +58,14 @@ class RunSummary(BaseModel):
     total_cost_usd: float
     total_model_calls: int
     total_cached_model_calls: int
-    # Latency percentiles describe live provider calls only: records served
-    # wholly from the response cache report ~0 ms and would otherwise make a
-    # cached re-run look arbitrarily fast.
+    # Latency percentiles describe live provider calls only: wholly cached
+    # records are excluded, because they report ~0 ms and would otherwise
+    # make a cached re-run look arbitrarily fast. A record with at least one
+    # live call is kept even when another of its calls was a cache hit — a
+    # multi-call defense on a warm cache is the common case, and dropping it
+    # would leave nothing to compute a percentile over. A record that made no
+    # model call at all is "wholly cached" by the same test and is excluded
+    # too: its latency measures the guard's own work, not a provider.
     latency_uncached_count: int
     latency_p50_ms: float
     latency_p95_ms: float
@@ -94,7 +99,9 @@ def summarize(records: Sequence[CaseRecord]) -> RunSummary:
     grouped: dict[str, list[CaseRecord]] = defaultdict(list)
     for record in records:
         grouped[record.case_type.value].append(record)
-    latencies = sorted(record.latency_ms for record in records if record.cached_model_calls == 0)
+    latencies = sorted(
+        record.latency_ms for record in records if record.cached_model_calls < record.model_calls
+    )
     return RunSummary(
         total=len(records),
         by_type={key: _type_summary(group) for key, group in grouped.items()},

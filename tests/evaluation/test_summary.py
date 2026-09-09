@@ -112,3 +112,18 @@ def test_summarize_empty_has_no_uncached_records() -> None:
     summary = summarize([])
     assert summary.latency_uncached_count == 0
     assert summary.total_cached_model_calls == 0
+
+
+def test_percentiles_keep_partially_cached_records() -> None:
+    # A TIP-Guard record whose canonicalizer call is a cache hit while the
+    # main model runs live still measures a real provider call, so dropping
+    # it would collapse both percentiles on any warm-cache re-run.
+    summary = summarize(
+        [
+            rec(case_id="partial", latency_ms=250.0, model_calls=2, cached_model_calls=1),
+            rec(case_id="wholly-cached", latency_ms=0.0, model_calls=2, cached_model_calls=2),
+        ]
+    )
+    assert summary.latency_uncached_count == 1
+    assert summary.latency_p50_ms == 250.0
+    assert summary.latency_p95_ms == 250.0
