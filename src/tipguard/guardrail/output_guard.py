@@ -93,7 +93,14 @@ class OutputGuard:
 
         score: float | None = None
         usage: ModelResponse | None = None
-        if self._classifier is not None and text:
+        # A leaked answer is already blocked, so scoring it changes no
+        # decision -- and sending it would hand the protected value to the
+        # classifier's provider, which for every real configuration is an
+        # external API. The evaluation plan's rule that judges never see
+        # protected values applies to a scoring classifier for the same
+        # reason, so detection short-circuits scoring rather than the two
+        # running side by side.
+        if self._classifier is not None and text and not leaked:
             verdict = self._classifier.score(text)
             score = verdict.score
             usage = getattr(self._classifier, "last_usage", None)

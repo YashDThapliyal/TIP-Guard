@@ -134,3 +134,26 @@ def test_a_trace_never_names_the_value_it_matched(policies: PoliciesConfig) -> N
     check = OutputGuard(policies).check(f"the value is {secret}")
     assert all(secret not in trace.detail for trace in check.traces)
     assert all(secret not in reason for reason in check.reasons)
+
+
+def test_a_leaked_answer_is_never_forwarded_to_the_classifier(
+    policies: PoliciesConfig,
+) -> None:
+    # The classifier's provider is an external API in every real
+    # configuration, so scoring a leaked answer would hand it the protected
+    # value -- the disclosure the guard exists to stop, made to a third party
+    # rather than to the caller. The answer is already blocked by then, so
+    # the score cannot change the decision either.
+    secret = policies.policies[0].protected_values[0]
+    spy = StubClassifier(0.1)
+    check = OutputGuard(policies, output_classifier=spy).check(f"the canary is {secret}")
+    assert check.blocked
+    assert spy.calls == 0
+
+
+def test_a_clean_answer_is_still_scored(policies: PoliciesConfig) -> None:
+    # The other side of the short circuit: skipping the classifier must
+    # happen only when a leak was actually found.
+    spy = StubClassifier(0.1)
+    OutputGuard(policies, output_classifier=spy).check("an ordinary answer")
+    assert spy.calls == 1

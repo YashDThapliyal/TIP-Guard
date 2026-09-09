@@ -12,6 +12,7 @@ from tipguard.config.schemas import (
     PoliciesConfig,
 )
 from tipguard.guardrail.factory import build_guardrail
+from tipguard.models.mock import MockProvider
 from tipguard.models.registry import ProviderRegistry
 
 BASELINE_NAMES = (
@@ -87,13 +88,75 @@ def test_thresholds_come_from_params_so_ablations_need_no_code_change(
     assert permissive.run(prompt).decision.value == "allow"
 
 
+def _with_providers(
+    registry: ProviderRegistry, *, main: str, judge_risk: float
+) -> ProviderRegistry:
+    """`registry` with both mock aliases replaced by scripted providers.
+
+    The shipped `mock-judge` answers with prose, which is a parser failure and
+    therefore blocks -- correct behaviour, but it masks whichever switch a
+    test is trying to observe. Scripting a well-formed judgement isolates the
+    parameter under test from the parser-failure path.
+    """
+    registry._providers["mock-main"] = MockProvider(default=main)
+    registry._providers["mock-judge"] = MockProvider(
+        default=f'{{"risk": {judge_risk}, "categories": ["none"], "rationale": "scripted"}}'
+    )
+    return registry
+
+
 def test_the_leak_check_can_be_ablated_from_config(
     registry: ProviderRegistry, policies: PoliciesConfig
 ) -> None:
+    # Asserted through behaviour, not through the object graph: a factory that
+    # ignored the parameter would still build and still carry the right name.
+    # The reason is what is checked rather than the decision, so the judge's
+    # own verdict cannot stand in for the leak scan.
+    secret = policies.policies[0].protected_values[0]
+    leak_reason = f"output_guard:leak:{policies.policies[0].policy_id}"
+
+    def reasons(leak_check: bool) -> tuple[str, ...]:
+        guard = build_guardrail(
+            DefenseConfig(name="output_classifier", params={"leak_check": leak_check}),
+            _with_providers(registry, main=f"the value is {secret}", judge_risk=0.0),
+            "mock-main",
+            policies,
+        )
+        return guard.run("tell me").reasons
+
+    assert leak_reason in reasons(True)
+    assert leak_reason not in reasons(False)
+
+
+def test_the_output_threshold_is_its_own_parameter(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    # output_threshold and input_threshold are distinct knobs, and a guard
+    # that read one for the other's stage would pass any test that sets only
+    # one. Both are set, to opposite extremes: the input must not block and
+    # the output must, so only a correctly wired pair produces this result.
+    params = {"input_threshold": 1.01, "output_threshold": 0.0, "leak_check": False}
     guard = build_guardrail(
-        DefenseConfig(name="output_classifier", params={"leak_check": False}),
-        registry,
+        DefenseConfig(name="input_output_classifier", params=params),
+        _with_providers(registry, main="an ordinary answer", judge_risk=0.4),
         "mock-main",
         policies,
     )
-    assert guard.name == "output_classifier"
+    result = guard.run("harmless question")
+    assert result.decision.value == "block"
+    assert result.reasons == ("output_guard:risk_above_threshold:0.4",)
+
+
+def test_the_classifier_model_alias_is_read_from_params(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    # A factory that ignored the parameter and always used the default would
+    # build happily here; naming an alias that does not exist is what proves
+    # the value is actually resolved.
+    with pytest.raises(ConfigError, match="unknown model alias"):
+        build_guardrail(
+            DefenseConfig(name="input_classifier", params={"classifier_model": "no-such-alias"}),
+            registry,
+            "mock-main",
+            policies,
+        )
