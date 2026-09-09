@@ -46,6 +46,39 @@ OVERRIDE_KEYWORDS: frozenset[str] = frozenset(
 WEIGHT_PER_KEYWORD = 0.35
 
 
+def _canonical(keyword: str) -> str:
+    """The comparison key for one keyword: case-folded, whitespace-collapsed.
+
+    An empty or whitespace-only keyword compiles to `\b\b`, which matches
+    almost any text and would silently saturate every score. A hand-edited
+    blocklist is exactly where that typo comes from, so it fails here at
+    construction rather than at measurement time.
+    """
+    words = keyword.split()
+    if not words:
+        raise ValueError("keyword must contain at least one word")
+    return " ".join(words).casefold()
+
+
+def _distinct(keywords: Sequence[str]) -> tuple[str, ...]:
+    """The caller's keywords with duplicates dropped, first spelling kept.
+
+    Two entries differing only in case or in spacing compile to the same
+    pattern, so scoring both would charge `WEIGHT_PER_KEYWORD` twice for a
+    single textual hit and quietly break the documented per-distinct-keyword
+    weight. Order is preserved because evidence order is the keyword-list
+    order.
+    """
+    seen: set[str] = set()
+    kept: list[str] = []
+    for keyword in keywords:
+        key = _canonical(keyword)
+        if key not in seen:
+            seen.add(key)
+            kept.append(keyword)
+    return tuple(kept)
+
+
 def _compile(keyword: str) -> re.Pattern[str]:
     """Word-bounded, case-insensitive matcher for one keyword.
 
@@ -57,26 +90,31 @@ def _compile(keyword: str) -> re.Pattern[str]:
     it is left open on purpose: widening it is exactly the kind of quiet
     tuning that would turn an honest baseline into a flattering one.
     """
-    words = keyword.split()
-    if not words:
-        # An empty or whitespace-only keyword compiles to `\b\b`, which
-        # matches almost any text and would silently saturate every score.
-        # A hand-edited blocklist is exactly where that typo comes from, so
-        # it fails at construction rather than at measurement time.
-        raise ValueError("keyword must contain at least one word")
-    body = r"\s+".join(re.escape(word) for word in words)
+    body = r"\s+".join(re.escape(word) for word in keyword.split())
     return re.compile(rf"\b{body}\b", re.IGNORECASE)
 
 
 class KeywordClassifier:
-    """Scores a prompt by how many distinct blocklist keywords it contains."""
+    """Scores a prompt by how many distinct blocklist keywords it contains.
+
+    `RiskScore.evidence` echoes the caller's own blocklist entries verbatim,
+    so a caller must never put a protected value in the keyword list: doing
+    so would carry that value out of the classifier and into every trace and
+    report that records the evidence. Blocklists name the *kind* of asset
+    ("passphrase"), never the asset itself.
+
+    Every keyword outside `OVERRIDE_KEYWORDS` is labelled `data_exfiltration`,
+    including a caller-supplied one. The classifier has no way to tell which
+    kind of asset a custom keyword names, so it reports the generic category
+    rather than guessing a more specific one.
+    """
 
     name = "keyword"
 
     def __init__(self, keywords: Sequence[str] = DEFAULT_KEYWORDS) -> None:
         # Kept in list order, not as a set: evidence has to come out in a
         # fixed order for two runs of the same experiment to be comparable.
-        self._keywords: tuple[str, ...] = tuple(keywords)
+        self._keywords: tuple[str, ...] = _distinct(keywords)
         self._patterns: tuple[re.Pattern[str], ...] = tuple(_compile(k) for k in self._keywords)
 
     def score(self, text: str) -> RiskScore:

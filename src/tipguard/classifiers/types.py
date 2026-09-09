@@ -25,9 +25,14 @@ class RiskCategory(StrEnum):
     baselines below can actually see.
     """
 
+    # The first five are in the order the categories first appear in
+    # `configs/policies.yaml`, not in the order the brief listed them, so a
+    # later positional comparison against a policy's own categories cannot
+    # silently mismatch. `tests/classifiers/test_types.py` pins this against
+    # the file itself.
     DATA_EXFILTRATION = "data_exfiltration"
-    CREDENTIAL_DISCLOSURE = "credential_disclosure"
     PII = "pii"
+    CREDENTIAL_DISCLOSURE = "credential_disclosure"
     INFRASTRUCTURE_DISCLOSURE = "infrastructure_disclosure"
     CONFIDENTIAL_BUSINESS = "confidential_business"
     PROMPT_INJECTION = "prompt_injection"

@@ -128,3 +128,64 @@ def test_substitution_density_is_seen_in_the_very_first_window() -> None:
     # exercises a different branch from one with an English preamble.
     result = _score(LEET_RUN)
     assert result.evidence == ("substitution_density",)
+
+
+# Five ordinary sentences carrying a date, a price, a version string, a phone
+# number and a hex digest. Before the substitution-density rule was restricted
+# to tokens that also contain a letter, every one of these scored 0.30: with
+# whitespace stripped, a purely numeric token supplied the density for a
+# window made otherwise of ordinary words. The corpus hid this because its
+# hard negatives contain no multi-digit runs at all.
+NUMERIC_PROSE = (
+    "The incident happened on 2026-09-08 and was closed the following morning.",
+    "The annual licence costs 1499.00 dollars plus 120.50 in support fees.",
+    "Please upgrade the agent to version 4.12.7 before the end of the quarter.",
+    "Call the duty desk on 555 0142 or 555 0199 if the pager does not answer.",
+    "We shipped 3 builds in 24 hours and rolled 2 of them back within 30 minutes.",
+)
+
+
+@pytest.mark.parametrize("text", NUMERIC_PROSE)
+def test_numeric_prose_does_not_look_like_a_substitution_cipher(text: str) -> None:
+    assert _score(text).score == 0.0
+
+
+def test_digits_still_count_as_replacements_inside_a_lettered_token() -> None:
+    # The restriction must not blunt the rule it protects: leetspeak always
+    # leaves letters beside the glyphs it substitutes in, so its tokens are
+    # lettered and its digits still count.
+    assert _score(LEET_RUN).evidence == ("substitution_density",)
+
+
+def test_a_morse_payload_ending_the_prompt_is_still_detected() -> None:
+    # The pattern used to require trailing whitespace after every group, so a
+    # four-group payload running to the end of the input fell one group short
+    # of the documented minimum and scored zero.
+    result = _score("Read this: .... . .-.. .-..")
+    assert result.evidence == ("morse_run",)
+
+
+def test_four_groups_are_the_minimum_for_a_morse_run() -> None:
+    assert _score("Read this: .... . .-..").score == 0.0
+
+
+def test_an_instructional_mention_is_not_injection_phrasing() -> None:
+    # The phrase used to match as a prefix, so "instructional" scored the
+    # full 0.4 that a genuine "follow the instruction" does.
+    assert _score("The video is instructional and quite good.").score == 0.0
+
+
+def test_the_plural_instruction_phrase_still_matches() -> None:
+    assert _score("Please follow the instructions below.").evidence == ("follow_the_instruction",)
+
+
+def test_a_hex_digest_still_looks_like_a_substitution_cipher() -> None:
+    # Recorded, not fixed. The reviewer's list of prose false positives
+    # included a hex digest, and the lettered-token restriction does NOT
+    # clear it: a digest token genuinely mixes letters and digits in exactly
+    # the proportion leetspeak does, so no character-class rule can separate
+    # them. Four of the five listed prose shapes -- date, price, version,
+    # phone number -- are now clean; this one is a real residual limitation
+    # of a syntactic detector and is asserted so it stays visible.
+    text = "The build artifact hash is 3f9a2b7c4e1d8065 and should match the manifest."
+    assert _score(text).evidence == ("substitution_density",)

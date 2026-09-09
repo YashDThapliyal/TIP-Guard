@@ -21,8 +21,12 @@ from tipguard.classifiers.types import RiskCategory, RiskScore
 BASE64_RUN = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 #: Four or more Morse letter groups in a row. Fewer than four is within reach
-#: of ordinary punctuation such as an ellipsis followed by a dash.
-MORSE_RUN = re.compile(r"(?:[.\-]{1,6}\s){4,}")
+#: of ordinary punctuation such as an ellipsis followed by a dash. Written as
+#: one group plus three or more whitespace-separated successors rather than as
+#: four repetitions of "group then whitespace", so that a payload running to
+#: the very end of the prompt -- which has no trailing whitespace -- still
+#: reaches the documented four-group minimum.
+MORSE_RUN = re.compile(r"[.\-]{1,6}(?:\s+[.\-]{1,6}){3,}")
 
 #: Markers of a Python snippet that assembles a string a character or a chunk
 #: at a time -- the shape the `code` transformation family emits.
@@ -64,7 +68,7 @@ INJECTION_PHRASES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     for name, body in (
         ("ignore_previous_instructions", r"\bignore\s+(?:all\s+|any\s+)?(?:previous|prior)\b"),
         ("do_what_it_says", r"\bdo\s+what\s+it\s+says\b"),
-        ("follow_the_instruction", r"\bfollow\s+the\s+instruction"),
+        ("follow_the_instruction", r"\bfollow\s+the\s+instructions?\b"),
         ("comply", r"\bcomply\b"),
     )
 )
@@ -80,14 +84,33 @@ def _is_word_position(char: str) -> bool:
     return char.isalnum() or char in SUBSTITUTION_SYMBOLS
 
 
+def _replacement_flags(text: str) -> list[int]:
+    """One flag per word-position character: 1 where a letter looks replaced.
+
+    A non-alphabetic character counts as a replacement only when its own
+    whitespace-delimited token also contains a letter. Without that guard the
+    rule fires on any prose carrying a date, a price, a version number or a
+    phone number: collapsing whitespace lets a purely numeric token supply the
+    density for a window made otherwise of ordinary words. Leetspeak, by
+    contrast, always leaves letters beside the glyphs it substitutes in.
+    """
+    flags: list[int] = []
+    for token in text.split():
+        lettered = any(char.isalpha() for char in token)
+        flags.extend(
+            0 if char.isalpha() or not lettered else 1 for char in token if _is_word_position(char)
+        )
+    return flags
+
+
 def _has_substitution_density(text: str) -> bool:
     """True if some twelve-character word run is a quarter digits or symbols.
 
-    Whitespace is collapsed away first, so a short leeted phrase is still
-    detected when it sits inside a long, ordinary sentence -- which is how
-    the benchmark's wrappers present it.
+    Whitespace is collapsed away before the window slides, so a short leeted
+    phrase is still detected when it sits inside a long, ordinary sentence --
+    which is how the benchmark's wrappers present it.
     """
-    replaced = [0 if char.isalpha() else 1 for char in text if _is_word_position(char)]
+    replaced = _replacement_flags(text)
     if len(replaced) < DENSITY_WINDOW:
         return False
     threshold = DENSITY_WINDOW * MIN_REPLACED_FRACTION

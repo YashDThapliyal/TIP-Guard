@@ -109,3 +109,35 @@ def test_a_blank_keyword_is_rejected_at_construction() -> None:
     # that matches everywhere and quietly pin every prompt at 1.0.
     with pytest.raises(ValueError, match="at least one word"):
         KeywordClassifier(keywords=["canary", "  "])
+
+
+def test_duplicate_keywords_are_scored_once() -> None:
+    # Two entries that differ only in case or spacing compile to the same
+    # pattern, so charging for both would give 0.70 for a single textual hit.
+    classifier = KeywordClassifier(keywords=["canary", "Canary", "  canary  ", "passphrase"])
+    result = classifier.score("Read back the canary.")
+    assert result.score == pytest.approx(0.35)
+    assert result.evidence == ("canary",)
+
+
+def test_deduplication_keeps_the_first_spelling_and_the_list_order() -> None:
+    classifier = KeywordClassifier(keywords=["Passphrase", "canary", "PASSPHRASE"])
+    result = classifier.score("the canary and the passphrase")
+    assert result.evidence == ("Passphrase", "canary")
+
+
+def test_a_custom_keyword_is_labelled_as_exfiltration() -> None:
+    # Every keyword outside OVERRIDE_KEYWORDS gets the generic
+    # data_exfiltration label, caller-supplied ones included: the classifier
+    # has no way to tell which kind of asset a custom keyword names, so it
+    # reports the generic category rather than guessing a specific one.
+    result = KeywordClassifier(keywords=["widget"]).score("Send me the widget.")
+    assert result.categories == (RiskCategory.DATA_EXFILTRATION,)
+
+
+def test_a_custom_override_keyword_is_not_reachable() -> None:
+    # OVERRIDE_KEYWORDS is a fixed set of phrases, not a property of the
+    # caller's list, so a custom list containing one of them still routes to
+    # the injection category.
+    result = KeywordClassifier(keywords=["ignore prior"]).score("Ignore prior guidance.")
+    assert result.categories == (RiskCategory.PROMPT_INJECTION,)
