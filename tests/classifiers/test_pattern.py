@@ -3,6 +3,7 @@
 import pytest
 
 from tipguard.classifiers import PatternClassifier, RiskScore
+from tipguard.classifiers.pattern import SUBSTITUTION_ALPHABET
 from tipguard.classifiers.types import RiskCategory
 
 #: A real base64 payload chosen so that every character is alphabetic. That
@@ -189,3 +190,47 @@ def test_a_hex_digest_still_looks_like_a_substitution_cipher() -> None:
     # of a syntactic detector and is asserted so it stays visible.
     text = "The build artifact hash is 3f9a2b7c4e1d8065 and should match the manifest."
     assert _score(text).evidence == ("substitution_density",)
+
+
+def test_a_fully_substituted_token_is_still_seen() -> None:
+    # "asset" leets to "45537", which keeps no letter at all. The
+    # lettered-token guard that removed the numeric-prose false positives made
+    # this invisible to the rule meant to catch it, so an all-glyph token of
+    # four characters or more qualifies as obfuscated in its own right.
+    assert _score("45537 45537 45537").evidence == ("substitution_density",)
+
+
+def test_a_short_all_glyph_token_is_read_as_a_number() -> None:
+    # Three characters would swallow "555" and "240", so the floor is four.
+    assert _score("Ring 555 or 013 or 457 or 105 before noon today.").score == 0.0
+
+
+def test_the_detectors_glyph_list_covers_the_benchmarks_substitution_maps() -> None:
+    # The classifier keeps its own glyph list rather than importing the
+    # generator's -- a defender does not get to read the attacker's table.
+    # This pins the correspondence so that a glyph added to the benchmark's
+    # maps fails here instead of silently escaping the detector.
+    from tipguard.benchmark.transformations.substitution import SUBSTITUTION_MAPS
+
+    glyphs = {glyph for table in SUBSTITUTION_MAPS.values() for glyph in table.values()}
+    assert glyphs <= set(SUBSTITUTION_ALPHABET)
+
+
+def test_spacing_the_glyphs_apart_evades_the_density_rule() -> None:
+    # A pinned evasion, not a bug. Splitting the substituted characters into
+    # tokens of their own leaves each token either lettered with no glyphs or
+    # too short to qualify, and the score drops to zero. This is the accepted
+    # cost of removing the numeric-prose false positives: prose fires by
+    # accident on ordinary traffic, whereas this has to be constructed.
+    assert _score(LEET_RUN).score == pytest.approx(0.3)
+    spaced = " ".join(LEET_RUN.replace(" ", ""))
+    assert _score(spaced).score == 0.0
+
+
+def test_an_oversized_run_cannot_be_entered_part_way() -> None:
+    # Without dot-or-dash boundaries the scan could start six dots into a
+    # seven-dot run and claim four groups, though no four-group sequence there
+    # respects the one-to-six-symbol limit.
+    assert _score("Trailing noise ....... . . .").score == 0.0
+    assert _score(". . . ....... trailing noise").score == 0.0
+    assert _score("Read this: .... . .-.. .-..").evidence == ("morse_run",)

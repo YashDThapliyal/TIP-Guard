@@ -79,6 +79,12 @@ def _distinct(keywords: Sequence[str]) -> tuple[str, ...]:
     return tuple(kept)
 
 
+#: `OVERRIDE_KEYWORDS` in the same normal form keyword matching uses, so a
+#: differently-cased or differently-spaced spelling of an override phrase is
+#: still recognised as one.
+CANONICAL_OVERRIDES: frozenset[str] = frozenset(_canonical(k) for k in OVERRIDE_KEYWORDS)
+
+
 def _compile(keyword: str) -> re.Pattern[str]:
     """Word-bounded, case-insensitive matcher for one keyword.
 
@@ -132,9 +138,20 @@ class KeywordClassifier:
 
 
 def _categories(matched: Sequence[str]) -> tuple[str, ...]:
+    """The categories implied by the matched keywords.
+
+    Membership of the override set is tested on the canonical form, not on the
+    spelling the caller happened to write. Deduplication keeps whichever
+    spelling came first, so comparing the retained text directly would make
+    the category depend on list order: `["Ignore Prior", "ignore prior"]` and
+    the same pair reversed would land in different categories for identical
+    matches. Ordering may decide the evidence spelling; it must never decide
+    the verdict.
+    """
+    canonical = {_canonical(keyword) for keyword in matched}
     found: list[str] = []
-    if any(keyword not in OVERRIDE_KEYWORDS for keyword in matched):
+    if canonical - CANONICAL_OVERRIDES:
         found.append(RiskCategory.DATA_EXFILTRATION.value)
-    if any(keyword in OVERRIDE_KEYWORDS for keyword in matched):
+    if canonical & CANONICAL_OVERRIDES:
         found.append(RiskCategory.PROMPT_INJECTION.value)
     return tuple(found) if found else (RiskCategory.NONE.value,)
