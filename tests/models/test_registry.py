@@ -5,7 +5,7 @@ import pytest
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ModelsConfig, ModelSpec
 from tipguard.models.cache import ResponseCache
-from tipguard.models.registry import ProviderRegistry
+from tipguard.models.registry import ProviderRegistry, build_provider
 from tipguard.models.types import ModelRequest
 
 
@@ -101,3 +101,20 @@ def test_registry_does_not_share_cache_across_aliases_with_different_max_tokens(
 
     assert first_a.cached is False
     assert first_b.cached is False
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("mock", "mock"), ("openai", "openai"), ("anthropic", "anthropic"), ("ollama", "ollama")],
+)
+def test_build_provider_dispatches_every_declared_provider(provider: str, expected: str) -> None:
+    spec = ModelSpec(provider=provider, model="m")  # type: ignore[arg-type]
+    assert build_provider(spec).name == expected
+
+
+def test_build_provider_refuses_an_unrecognised_provider_name() -> None:
+    # `ollama` used to be the fall-through, so a spec that got past
+    # validation with any other name was silently pointed at localhost.
+    spec = ModelSpec.model_construct(provider="martian", model="m")
+    with pytest.raises(AssertionError, match="martian"):
+        build_provider(spec)

@@ -1,6 +1,7 @@
 """Build providers from the models config, memoised by alias."""
 
 import json
+from typing import assert_never
 
 from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import ModelsConfig, ModelSpec
@@ -13,13 +14,22 @@ from tipguard.models.types import ModelProvider
 
 
 def build_provider(spec: ModelSpec) -> ModelProvider:
+    """The provider named by `spec`, with no default.
+
+    Every branch is explicit and the tail is `assert_never`, so adding a name
+    to `ProviderName` without a branch here is a mypy error rather than a
+    silent fall-through. It used to fall through to Ollama, which pointed an
+    unrecognised name at localhost instead of failing.
+    """
     if spec.provider == "mock":
         return MockProvider(model=spec.model)
     if spec.provider == "openai":
         return OpenAIProvider(spec)
     if spec.provider == "anthropic":
         return AnthropicProvider(spec)
-    return OllamaProvider(spec)
+    if spec.provider == "ollama":
+        return OllamaProvider(spec)
+    assert_never(spec.provider)
 
 
 def _cache_namespace(spec: ModelSpec) -> str:
