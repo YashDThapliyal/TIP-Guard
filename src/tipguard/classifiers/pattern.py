@@ -124,37 +124,21 @@ def _obfuscated(tokens: list[str]) -> list[bool]:
     substituted end to end escapes this classifier. That is a property of
     conventional filtering and part of what the study is measuring, and hiding
     it behind a rule that fires on arithmetic would overstate the baseline.
+
+    The same verdict applies in the other direction. Emphasis ("stop!!!!")
+    scores here, because a run of exclamation marks is genuinely dense in
+    characters a substitution table uses. A trim for it was tried and removed:
+    the symbols that spell emphasis are the symbols that spell letters. A word
+    ending in a double letter ends in a doubled glyph once substituted, so the
+    trim cut two glyphs off "@cc€$$", "p@$$", "@ddr€$$", "pr°c€$$", "bu$!n€$$"
+    and "cl@$$" -- much of this project's own protected vocabulary -- and
+    silenced whole phrases built from them: "r€v€@l +h€ p@$$", "p@$$ +h€
+    cl@$$" and "+h€ cl@$$ l!$+" all scored zero with it and score with it
+    gone. Firing on emphasis is what a syntactic detector does; losing
+    "reveal the pass" is a hole in the one thing this classifier is good at,
+    so the false positive stays and is pinned.
     """
     return [any(char.isalpha() for char in token) for token in tokens]
-
-
-def _trim_emphasis(token: str) -> str:
-    """`token` without a trailing run of two or more identical symbol glyphs.
-
-    Half the substitution glyphs are also punctuation, so "stop!!!!" reads as
-    four replaced letters unless emphasis is taken out first. A doubled symbol
-    at the end of a word is punctuation in every text this project sees; a
-    substitution puts its glyphs where the letters were, which is inside the
-    word ("n€€d$" keeps its doubled glyph and is untouched here) or as a
-    single trailing character ("+h!$"), never as a repeated run tacked on.
-
-    Ordinary punctuation is peeled off as the run is, and the two alternate
-    until neither applies: emphasis usually arrives wearing a comma, a full
-    stop or a closing bracket, so looking only at the final character missed
-    every "stop!!!!," and "(Great!!!)" in a sentence. Characters that hold a
-    letter's place are never peeled, so a single trailing glyph survives.
-    """
-    end = len(token)
-    while True:
-        while end > 0 and not _is_word_position(token[end - 1]):
-            end -= 1
-        if not (
-            end >= 2 and token[end - 1] in SUBSTITUTION_SYMBOLS and token[end - 1] == token[end - 2]
-        ):
-            return token[:end]
-        char = token[end - 1]
-        while end > 0 and token[end - 1] == char:
-            end -= 1
 
 
 def _replacement_flags(text: str) -> list[int]:
@@ -174,7 +158,7 @@ def _replacement_flags(text: str) -> list[int]:
     accident on ordinary traffic while the evasion has to be constructed. It
     is pinned by a test rather than left to be rediscovered.
     """
-    tokens = [_trim_emphasis(token) for token in text.split()]
+    tokens = text.split()
     flags: list[int] = []
     for token, obfuscated in zip(tokens, _obfuscated(tokens), strict=True):
         flags.extend(
