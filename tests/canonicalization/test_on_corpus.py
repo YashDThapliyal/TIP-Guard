@@ -132,6 +132,43 @@ def _last_span(prompt: str) -> str:
     return min(blocks, key=_english_score)
 
 
+def _strip_leading_marker(span: str) -> str:
+    """`span` without a leading prose marker such as "P.S.".
+
+    For every family whose payload alphabet excludes a token like "P.S." --
+    caesar and reverse are pure letters, base64 is its own alphabet, morse is
+    dots and dashes. A leading token carrying interior punctuation was never
+    part of the payload: shifting it yields garbage glued to an otherwise
+    perfect decode ("P.S." came back as "C.F."), and for base64 and morse a
+    strict decoder rejects the whole span. Substitution is excluded because
+    its payload legitimately contains digits and symbols, and stripping on
+    that basis ate real leetspoken tokens.
+
+    Derived from the payload's own shape rather than by calling the
+    detector's equivalent helper, so a mistake shared between the two still
+    fails this test instead of agreeing with it.
+    """
+    tokens = span.split()
+    index = 0
+    while index < len(tokens) and _is_prose_marker(tokens[index]):
+        index += 1
+    return " ".join(tokens[index:]) if index < len(tokens) else span
+
+
+def _is_prose_marker(token: str) -> bool:
+    """Whether `token` is a wrapper's own label rather than payload.
+
+    Interior punctuation is the tell: "P.S." keeps a full stop once its edges
+    are stripped, while no payload alphabet produces one -- letters, base64
+    and morse all lack it, and leetspeak substitutes digits and symbols but
+    never inserts a period mid-word. Testing for *presence* of interior
+    punctuation rather than absence of letters is what makes this work for
+    base64, whose payload is not alphabetic either.
+    """
+    core = token.strip(".,:;!?-'\"")
+    return any(char in ".,:;!?" for char in core)
+
+
 def _oracle_decode(case: BenchmarkCase) -> str | None:
     """The true plaintext for an encoded case, decoded with real params.
 
@@ -141,6 +178,8 @@ def _oracle_decode(case: BenchmarkCase) -> str | None:
     """
     params = json.loads(case.metadata.get("encoded_params", "{}"))
     payload = _last_span(case.prompt)
+    if case.transformation in ("caesar", "reverse", "base64", "morse"):
+        payload = _strip_leading_marker(payload)
     try:
         family = Family(case.transformation)
     except ValueError:
@@ -526,19 +565,12 @@ def test_a_benign_transformation_is_recovered_exactly(
     supposed to leave alone, and a corpus test that only counts attacks would
     not see it.
     """
-    # Difficulty 1-2 only. Above that a wrapper may put the payload inline
-    # after a prefix like "P.S.", and this oracle hands the whole line to a
-    # strict decoder, so it reports a failure of its own extraction rather
-    # than of the canonicalizer. The system under test handles those cases;
-    # the oracle is what cannot follow, and an oracle that needed the
-    # detector's own extraction could not catch a shared bug.
     sample = [
         case
         for case in cases
         if case.case_type == "benign_transformation"
         and case.transformation in PER_FAMILY_DECODE_FLOORS
         and case.transformation != "multi_step"
-        and case.difficulty <= 2
     ]
     assert sample
     wrong = [
@@ -567,3 +599,21 @@ def test_no_decoded_view_is_offered_for_a_prompt_with_nothing_to_decode(
         )
     ]
     assert not invented, f"invented a decoded payload for: {invented[:5]}"
+
+
+def test_a_prose_marker_is_not_decoded_as_ciphertext(
+    cases: tuple[BenchmarkCase, ...],
+) -> None:
+    """A "P.S." label in front of a payload is the wrapper's, not the cipher's.
+
+    Shifting it produced "C.F." glued to an otherwise perfect decode. The
+    canonicalizer and this file's oracle made that mistake identically, so
+    the corpus test agreed with the bug rather than catching it -- which is
+    the one failure an independent oracle exists to prevent. This asserts the
+    decode against a literal expected string, so neither side can drift back
+    to a shared answer.
+    """
+    case = next(c for c in cases if c.case_id == "benign_transformation-caesar-l4-0002")
+    decoded = _blind_decode(case)
+    assert decoded is not None
+    assert decoded.strip() == "The printer works again now that someone cleared the jam"

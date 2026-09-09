@@ -444,6 +444,11 @@ STOPLIST: frozenset[str] = frozenset(
 #: English at all" test applies to all three.
 LOW_HIT_THRESHOLD = 0.20
 
+#: How much more readable a decode must be than the text it came from before
+#: that counts as evidence of an encoding on its own. Two-fold: ordinary
+#: prose cannot be made twice as stoplist-dense by shifting or reversing it.
+_DECODE_IMPROVEMENT = 2.0
+
 #: A stoplist hit rate at or above this, reached without any wrapper naming
 #: the family, is read as "this decode already looks like real English" --
 #: i.e. one round was enough, so the case is not multi-step. Set comfortably
@@ -613,6 +618,37 @@ def _best_letters_decode(paragraph: str) -> tuple[Family, float] | None:
     return Family.REVERSE, reversed_rate
 
 
+def _is_prose_marker(token: str) -> bool:
+    """Whether `token` is the wrapper's own label rather than payload.
+
+    Interior punctuation is the tell. No payload alphabet produces one:
+    letters, base64 and morse all lack it, and a substitution swaps letters
+    for digits or symbols without inserting a full stop mid-word.
+    """
+    core = token.strip(string.punctuation)
+    return any(char in ".,:;!?" for char in core)
+
+
+def _strip_prose_marker(span: str) -> str:
+    """`span` without a leading prose marker such as "P.S.".
+
+    A caesar or reverse payload is pure letters and spaces -- the encoders
+    touch letters and leave everything else alone -- so a leading token
+    carrying interior punctuation was never ciphertext. It is the wrapper's
+    own label, and shifting it produces garbage: "P.S." came back as "C.F."
+    glued to an otherwise perfect decode. Both the canonicalizer and the
+    corpus test's independent oracle made that mistake identically, so the
+    test agreed with the bug instead of catching it.
+    """
+    tokens = span.split()
+    index = 0
+    while index < len(tokens) and _is_prose_marker(tokens[index]):
+        index += 1
+    # Never strip the whole span: a payload of nothing is not an improvement
+    # on a payload with a marker.
+    return " ".join(tokens[index:]) if index < len(tokens) else span
+
+
 def letters_payload(text: str) -> str | None:
     """The span a caesar or reverse decode should operate on.
 
@@ -626,7 +662,7 @@ def letters_payload(text: str) -> str | None:
     """
     named = bool(CAESAR_WORDS.search(text)) != bool(REVERSE_WORDS.search(text))
     candidate = _lowest_hit_paragraph(text, NAMED_CIPHER_MIN_TOKENS if named else MIN_LETTER_TOKENS)
-    return candidate[0] if candidate is not None else None
+    return _strip_prose_marker(candidate[0]) if candidate is not None else None
 
 
 def _resolve_letters_family(text: str) -> LettersResolution | None:
@@ -638,7 +674,16 @@ def _resolve_letters_family(text: str) -> LettersResolution | None:
         return None
     paragraph, hit_rate = candidate
     if hit_rate >= LOW_HIT_THRESHOLD:
-        return None
+        # The span reads like language already -- but a reversed sentence can
+        # score at the threshold by accident, because reversing leaves short
+        # words like "a" and "no" intact or turns them into other real words.
+        # One shipped case sat at exactly 0.20 and was missed entirely. So
+        # before giving up, ask whether some decode makes it dramatically
+        # more readable; a real encoding does, ordinary prose does not.
+        resolved = _best_letters_decode(paragraph)
+        if resolved is None or resolved[1] < hit_rate * _DECODE_IMPROVEMENT:
+            return None
+        return LettersResolution(resolved[0], resolved[1], False)
     if mentions_caesar and not mentions_reverse:
         return LettersResolution(Family.CAESAR, 1.0, True)
     if mentions_reverse and not mentions_caesar:
@@ -736,6 +781,7 @@ def _extract_morse(text: str) -> str | None:
     for paragraph in _paragraphs(text):
         if not MORSE_RUN.search(paragraph):
             continue
+        paragraph = _strip_prose_marker(paragraph)
         compact = paragraph.replace(" ", "")
         if not compact:
             continue
