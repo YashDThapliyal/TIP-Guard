@@ -291,3 +291,33 @@ def test_unparseable_source_is_a_reason_not_an_exception() -> None:
 def test_a_snippet_may_end_in_a_bare_expression() -> None:
     # The generator assigns to `msg`, but a defence cannot assume that shape.
     assert _analyze('"".join(["a", "b"])').result == "ab"
+
+
+#: Each string operation, in a shape whose result would exceed the cap. The
+#: refusal must cost no more than holding the inputs.
+OVERSIZED_RESULTS = (
+    ('parts = ["' + '","'.join(["z" * 9000] * 200) + '"]\nmsg = "".join(parts)', 1.0),
+    ('msg = "' + "a" * 9000 + '".replace("a", "' + "b" * 500 + '")', 0.5),
+    ('a = "' + "x" * 9000 + '"\nmsg = a + a', 0.5),
+)
+
+
+@pytest.mark.parametrize(("source", "budget_mb"), OVERSIZED_RESULTS)
+def test_an_oversized_result_is_refused_before_it_is_built(source: str, budget_mb: float) -> None:
+    """The cap applies to the computed length, not the finished value.
+
+    Checking afterwards still allocates first: a `replace` that expands its
+    input reached 4.5 MB before being refused, which is exactly the cost the
+    cap exists to avoid. Every operation here can work out its own output
+    length from its inputs, so it does.
+    """
+    import tracemalloc
+
+    tracemalloc.start()
+    try:
+        analysis = _analyze(source)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert analysis.rejected_reason == BUDGET_EXCEEDED
+    assert peak < budget_mb * 1_000_000, f"allocated {peak / 1e6:.2f} MB before refusing"

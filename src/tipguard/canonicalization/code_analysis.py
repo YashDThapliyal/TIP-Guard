@@ -87,6 +87,19 @@ class _Budget:
         return value
 
     @staticmethod
+    def check_length(length: int) -> None:
+        """Refuse an oversized result before it is built.
+
+        Every string operation here can compute its own output length from
+        its inputs, so the cap is applied to that number rather than to the
+        finished value. Checking afterwards still allocates first: a
+        `replace` that expands its input reached 4.5 MB before being
+        refused, which is the cost the cap exists to avoid paying.
+        """
+        if length > MAX_STRING_LENGTH:
+            raise UnsupportedCodeError(BUDGET_EXCEEDED)
+
+    @staticmethod
     def check_sequence(value: list[object]) -> list[object]:
         """Bound a list the way a string is bounded.
 
@@ -119,7 +132,9 @@ def _call_join(target: object, args: Sequence[object]) -> str:
     if len(args) != 1 or not isinstance(args[0], (list, tuple)):
         raise UnsupportedCodeError("join expects one sequence")
     parts = [_require_str(part, "join") for part in args[0]]
-    return _Budget.check_string(separator.join(parts))
+    if parts:
+        _Budget.check_length(sum(len(part) for part in parts) + len(separator) * (len(parts) - 1))
+    return separator.join(parts)
 
 
 def _call_replace(target: object, args: Sequence[object]) -> str:
@@ -132,7 +147,8 @@ def _call_replace(target: object, args: Sequence[object]) -> str:
         # `"abc".replace("", "x")` inserts between every character, which is
         # a cheap way to multiply a string; nothing legitimate needs it.
         raise UnsupportedCodeError("replace with an empty pattern")
-    return _Budget.check_string(text.replace(old, new))
+    _Budget.check_length(len(text) + text.count(old) * (len(new) - len(old)))
+    return text.replace(old, new)
 
 
 def _call_chr(_target: object, args: Sequence[object]) -> str:
@@ -332,7 +348,8 @@ class RestrictedCodeAnalyzer:
         left = self._expression(node.left, scope, budget, operations)
         right = self._expression(node.right, scope, budget, operations)
         if isinstance(left, str) and isinstance(right, str):
-            return _Budget.check_string(left + right)
+            _Budget.check_length(len(left) + len(right))
+            return left + right
         if isinstance(left, list) and isinstance(right, list):
             if len(left) + len(right) > MAX_ITERATIONS:
                 # Checked before the concatenation, not after: the point is
