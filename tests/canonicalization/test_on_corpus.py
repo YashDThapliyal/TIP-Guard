@@ -22,6 +22,7 @@ text" a checkable claim at all.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -149,10 +150,10 @@ def _strip_leading_marker(span: str) -> str:
     fails this test instead of agreeing with it.
     """
     tokens = span.split()
-    index = 0
-    while index < len(tokens) and _is_prose_marker(tokens[index]):
-        index += 1
-    return " ".join(tokens[index:]) if index < len(tokens) else span
+    if len(tokens) < 2 or not _is_prose_marker(tokens[0]):
+        return span
+    remainder = " ".join(tokens[1:])
+    return remainder if len(remainder) >= 12 else span
 
 
 def _is_prose_marker(token: str) -> bool:
@@ -165,8 +166,11 @@ def _is_prose_marker(token: str) -> bool:
     punctuation rather than absence of letters is what makes this work for
     base64, whose payload is not alphabetic either.
     """
-    core = token.strip(".,:;!?-'\"")
-    return any(char in ".,:;!?" for char in core)
+    # Single letters separated by full stops -- "P.S.", "N.B.". Narrow on
+    # purpose: a looser rule ate a payload's own "3.14" and a shifted "U.S.".
+    # Written out here rather than imported, so a mistake shared with the
+    # detector still fails this test.
+    return bool(re.match(r"^[A-Za-z](?:\.[A-Za-z])*\.$", token))
 
 
 def _oracle_decode(case: BenchmarkCase) -> str | None:

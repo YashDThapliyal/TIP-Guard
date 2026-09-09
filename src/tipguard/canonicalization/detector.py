@@ -618,15 +618,24 @@ def _best_letters_decode(paragraph: str) -> tuple[Family, float] | None:
     return Family.REVERSE, reversed_rate
 
 
-def _is_prose_marker(token: str) -> bool:
-    """Whether `token` is the wrapper's own label rather than payload.
+#: A wrapper's own label: single letters separated by full stops, as in
+#: "P.S." or "N.B.". Deliberately this narrow. An earlier version stripped
+#: any leading token with interior punctuation, which silently ate real
+#: ciphertext -- a payload opening "3.14 vf gur inyhr" lost its number, a
+#: shifted "U.S." lost its abbreviation, and an ordinary shifted word that
+#: happened to contain a full stop lost the word. Truncating the ciphertext
+#: is worse than leaving a four-character label on it, because the decode
+#: then quietly answers a different question.
+#: Below this many characters, a span is too short to give a token away on a
+#: guess -- the marker may well be the payload.
+_MIN_PAYLOAD_CHARS = 12
 
-    Interior punctuation is the tell. No payload alphabet produces one:
-    letters, base64 and morse all lack it, and a substitution swaps letters
-    for digits or symbols without inserting a full stop mid-word.
-    """
-    core = token.strip(string.punctuation)
-    return any(char in ".,:;!?" for char in core)
+_PROSE_MARKER = re.compile(r"^[A-Za-z](?:\.[A-Za-z])*\.$")
+
+
+def _is_prose_marker(token: str) -> bool:
+    """Whether `token` is the wrapper's own label rather than payload."""
+    return bool(_PROSE_MARKER.match(token))
 
 
 def _strip_prose_marker(span: str) -> str:
@@ -641,12 +650,19 @@ def _strip_prose_marker(span: str) -> str:
     test agreed with the bug instead of catching it.
     """
     tokens = span.split()
-    index = 0
-    while index < len(tokens) and _is_prose_marker(tokens[index]):
-        index += 1
-    # Never strip the whole span: a payload of nothing is not an improvement
-    # on a payload with a marker.
-    return " ".join(tokens[index:]) if index < len(tokens) else span
+    # At most one token, and only when a real payload remains. A ciphertext
+    # can legitimately begin with an abbreviation -- a shifted "U.S." is
+    # indistinguishable from a label -- so the rule is bounded rather than
+    # made cleverer: the cost of a wrong strip is one short token, never a
+    # truncated or empty payload.
+    if len(tokens) < 2 or not _is_prose_marker(tokens[0]):
+        return span
+    remainder = " ".join(tokens[1:])
+    # Measured in characters, not tokens: a base64 payload is one long token,
+    # so a token-count guard blocked exactly the cases this exists to fix.
+    if len(remainder) < _MIN_PAYLOAD_CHARS:
+        return span
+    return remainder
 
 
 def letters_payload(text: str) -> str | None:

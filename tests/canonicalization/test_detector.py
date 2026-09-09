@@ -10,6 +10,8 @@ wrong one scores close to 0 -- there is no ambiguous middle ground to reason
 about by hand.
 """
 
+import pytest
+
 from tipguard.benchmark.transformations.base import Family
 from tipguard.canonicalization.detector import (
     STOPLIST,
@@ -18,6 +20,7 @@ from tipguard.canonicalization.detector import (
     _best_caesar_shift,
     _hit_rate,
     _mostly_printable,
+    _strip_prose_marker,
     _try_base64_decode,
 )
 
@@ -271,3 +274,38 @@ def test_try_base64_decode_round_trips_the_fixture() -> None:
 
 def test_try_base64_decode_rejects_invalid_padding() -> None:
     assert _try_base64_decode("not@valid@base64@@@@@@@") is None
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        "3.14 vf gur inyhr bs cv sbe nal pvepyr",
+        "Vg.f svar naq abg n znexre ng nyy urer",
+        "1.21 tvtnjnggf vf jung gur pne arrqf",
+    ],
+)
+def test_a_marker_rule_does_not_truncate_real_ciphertext(span: str) -> None:
+    # The rule strips a wrapper's own label, and an over-broad version of it
+    # ate payload instead: any leading token with interior punctuation went,
+    # so a payload opening "3.14" lost its number and a shifted word
+    # containing a full stop lost the word. Truncating ciphertext is worse
+    # than leaving a four-character label on it, because the decode then
+    # quietly answers a different question.
+    assert _strip_prose_marker(span) == span
+
+
+@pytest.mark.parametrize(
+    ("span", "expected"),
+    [
+        ("P.S. Gur cevagre jbexf ntnva abj", "Gur cevagre jbexf ntnva abj"),
+        ("N.B. gur zrffntr sbyybjf urer", "gur zrffntr sbyybjf urer"),
+    ],
+)
+def test_a_real_marker_is_stripped(span: str, expected: str) -> None:
+    assert _strip_prose_marker(span) == expected
+
+
+def test_a_marker_is_kept_when_nothing_substantial_remains() -> None:
+    # An abbreviation is indistinguishable from a label, so the rule is
+    # bounded rather than made cleverer: never strip the payload away.
+    assert _strip_prose_marker("P.S. abj") == "P.S. abj"
