@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 from tipguard import __version__
 from tipguard.benchmark.io import DatasetError, load_cases
@@ -149,12 +150,31 @@ def _classify_existing_run_dir(run_dir: Path) -> bool:
     return True
 
 
-def _claim_ownership(run_dir: Path) -> None:
-    """Take the directory, atomically. Exclusive creation is what makes it so."""
+def _open_owner_file(run_dir: Path) -> TextIO:
+    """Create the ownership file, or refuse: exclusive creation is the claim."""
     try:
-        handle = (run_dir / RUN_OWNER_MARKER).open("x", encoding="utf-8")
+        return (run_dir / RUN_OWNER_MARKER).open("x", encoding="utf-8")
     except FileExistsError as exc:
         raise _in_progress_error(run_dir) from exc
+
+
+def _claim_ownership(run_dir: Path) -> bool:
+    """Take the directory atomically. Returns True if it had to be recreated.
+
+    A concurrent run that failed with nothing written removes its own
+    directory, and it can do so between this caller classifying the
+    directory and this claim opening a file inside it. That is a fresh start,
+    not an error: the directory is recreated and claimed again, and the
+    caller is told so it does not report resuming a run that no longer
+    exists. One retry only — a second disappearance is not that race.
+    """
+    recreated = False
+    try:
+        handle = _open_owner_file(run_dir)
+    except FileNotFoundError:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        handle = _open_owner_file(run_dir)
+        recreated = True
     with handle:
         handle.write(
             json.dumps(
@@ -165,6 +185,7 @@ def _claim_ownership(run_dir: Path) -> None:
                 }
             )
         )
+    return recreated
 
 
 def _reserve_run_dir(run_dir: Path) -> bool:
@@ -183,27 +204,43 @@ def _reserve_run_dir(run_dir: Path) -> bool:
     """
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
-        resumed = False
+        resumed, created = False, True
     except FileExistsError as exc:
         if not run_dir.is_dir():
             raise ConfigError(f"run directory path is not a directory: {run_dir}") from exc
-        resumed = _classify_existing_run_dir(run_dir)
-    _claim_ownership(run_dir)
-    return resumed
+        resumed, created = _classify_existing_run_dir(run_dir), False
+    try:
+        recreated = _claim_ownership(run_dir)
+    except BaseException:
+        # A directory this call created and never claimed would otherwise be
+        # left behind, and the next run would announce that it is resuming a
+        # run that never started.
+        if created:
+            _remove_run_dir_if_empty(run_dir)
+        raise
+    return resumed and not recreated
+
+
+def _remove_run_dir_if_empty(run_dir: Path) -> None:
+    """Drop a run directory nothing was ever written into, if it still exists."""
+    with contextlib.suppress(OSError):
+        if run_dir.is_dir() and not any(run_dir.iterdir()):
+            run_dir.rmdir()
 
 
 def _release_run_dir(run_dir: Path) -> None:
-    """Undo the claim after a failed run.
+    """Undo the claim after a failed or interrupted run.
 
     The ownership file goes first, so a retry with the same id sees the
     wreckage rather than a run that looks live; the directory follows if
-    nothing was ever written into it. A process killed outright runs neither
-    step, which is exactly when the leftover file should refuse the id.
+    nothing was ever written into it. Every step tolerates the directory
+    having already vanished, because a concurrent invocation may be doing
+    the same cleanup. A process killed outright runs none of this, which is
+    exactly when the leftover file should refuse the id.
     """
     with contextlib.suppress(OSError):
         (run_dir / RUN_OWNER_MARKER).unlink(missing_ok=True)
-        if run_dir.is_dir() and not any(run_dir.iterdir()):
-            run_dir.rmdir()
+    _remove_run_dir_if_empty(run_dir)
 
 
 def _log_records(records: Sequence[CaseRecord]) -> None:
@@ -319,7 +356,12 @@ def _run_evaluated(
             config, models, policies, cases, config_path, resolved_run_id, now, output_dir
         )
         _write_artifacts(run_dir, records, summary, manifest)
-    except Exception:
+    except BaseException:
+        # BaseException, not Exception: Ctrl-C is the commonest way a long
+        # run ends early, and `KeyboardInterrupt` (like `SystemExit`) would
+        # otherwise skip the release and leave the id refused as held by the
+        # user's own dead process. A kill signal still runs nothing, which is
+        # the case the ownership file is meant to catch.
         _release_run_dir(run_dir)
         raise
     return RunArtifacts(resolved_run_id, run_dir, summary, records, resumed)

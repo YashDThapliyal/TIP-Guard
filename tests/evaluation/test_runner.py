@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -484,3 +485,88 @@ def test_claiming_a_directory_twice_loses_the_race(tmp_path: Path) -> None:
     runner_module._claim_ownership(run_dir)
     with pytest.raises(ConfigError, match="in progress"):
         runner_module._claim_ownership(run_dir)
+
+
+def test_an_interrupted_run_leaves_the_id_resumable(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """Ctrl-C is the commonest way a long run ends early.
+
+    `KeyboardInterrupt` is a `BaseException`, so an `except Exception`
+    release skips it and the id is then refused as held by the user's own
+    dead process.
+    """
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def interrupted(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runner_module, "_write_artifacts", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        _run_smoke(repo_root, tmp_path, "ctrl-c")
+    assert not (tmp_path / "ctrl-c" / RUN_OWNER_MARKER).exists()
+    monkeypatch.undo()
+    assert _run_smoke(repo_root, tmp_path, "ctrl-c").run_dir == tmp_path / "ctrl-c"
+
+
+def test_a_system_exit_also_releases_the_id(repo_root: Path, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def exiting(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise SystemExit(2)
+
+    monkeypatch.setattr(runner_module, "_write_artifacts", exiting)
+    with pytest.raises(SystemExit):
+        _run_smoke(repo_root, tmp_path, "sys-exit")
+    assert not (tmp_path / "sys-exit").exists()
+
+
+def test_release_tolerates_a_directory_that_is_already_gone(tmp_path: Path) -> None:
+    run_dir = tmp_path / "vanished"
+    run_dir.mkdir()
+    runner_module._claim_ownership(run_dir)
+    shutil.rmtree(run_dir)
+    runner_module._release_run_dir(run_dir)  # must not raise
+
+
+def test_claiming_a_directory_removed_mid_reservation_starts_fresh(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The interleaving: a failed run cleans up between classify and claim.
+
+    Its `_release_run_dir` unlinks the ownership file, another invocation
+    classifies the now-empty directory as resumable, and the cleanup removes
+    the directory before that invocation can claim it.
+    """
+    run_dir = tmp_path / "raced-away"
+    run_dir.mkdir()
+    real_classify = runner_module._classify_existing_run_dir
+
+    def classify_then_vanish(path: Path) -> bool:
+        result = real_classify(path)
+        shutil.rmtree(path)  # the concurrent cleanup, at the worst moment
+        return result
+
+    monkeypatch.setattr(runner_module, "_classify_existing_run_dir", classify_then_vanish)
+    resumed = runner_module._reserve_run_dir(run_dir)
+    # The directory it would have resumed no longer exists, so this is a
+    # fresh run and must not claim to be resuming one.
+    assert resumed is False
+    assert (run_dir / RUN_OWNER_MARKER).exists()
+
+
+def test_a_failed_claim_does_not_leave_a_fresh_directory_behind(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    # Otherwise the next run finds an empty directory and announces that it
+    # is resuming a run that never started.
+    def refuse(run_dir: Path) -> bool:
+        raise ConfigError("claim refused")
+
+    monkeypatch.setattr(runner_module, "_claim_ownership", refuse)
+    run_dir = tmp_path / "never-claimed"
+    with pytest.raises(ConfigError, match="claim refused"):
+        runner_module._reserve_run_dir(run_dir)
+    assert not run_dir.exists()
