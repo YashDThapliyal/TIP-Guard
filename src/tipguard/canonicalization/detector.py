@@ -618,24 +618,30 @@ def _best_letters_decode(paragraph: str) -> tuple[Family, float] | None:
     return Family.REVERSE, reversed_rate
 
 
-#: A wrapper's own label: single letters separated by full stops, as in
-#: "P.S." or "N.B.". Deliberately this narrow. An earlier version stripped
-#: any leading token with interior punctuation, which silently ate real
-#: ciphertext -- a payload opening "3.14 vf gur inyhr" lost its number, a
-#: shifted "U.S." lost its abbreviation, and an ordinary shifted word that
-#: happened to contain a full stop lost the word. Truncating the ciphertext
-#: is worse than leaving a four-character label on it, because the decode
-#: then quietly answers a different question.
-#: Below this many characters, a span is too short to give a token away on a
-#: guess -- the marker may well be the payload.
-_MIN_PAYLOAD_CHARS = 12
+#: The labels a wrapper actually uses to introduce a payload. A closed list,
+#: not a shape.
+#:
+#: Shape rules kept eating real ciphertext. "Any leading token with interior
+#: punctuation" ate a payload opening "3.14" and any shifted word containing
+#: a full stop. Narrowing to "single letters separated by full stops" still
+#: ate a shifted "U.S.", because that is exactly the shape a label has.
+#:
+#: A closed list ends it, because these are *English* markers and ciphertext
+#: is not: a caesar shift maps "U.S." to "H.F." and never back to "P.S."
+#: unless the shift is zero. The residue is a plaintext abbreviation that
+#: happens to shift into one of these, which is rare, bounded to one token,
+#: and far cheaper than truncating every payload opening with an
+#: abbreviation.
+_PROSE_MARKERS = frozenset({"p.s.", "n.b.", "p.p.s.", "e.g.", "i.e.", "nb.", "ps."})
 
-_PROSE_MARKER = re.compile(r"^[A-Za-z](?:\.[A-Za-z])*\.$")
+#: Below this many characters, a span is too short to give a token away: the
+#: marker may well be the payload.
+_MIN_PAYLOAD_CHARS = 12
 
 
 def _is_prose_marker(token: str) -> bool:
-    """Whether `token` is the wrapper's own label rather than payload."""
-    return bool(_PROSE_MARKER.match(token))
+    """Whether `token` is a wrapper's own label rather than payload."""
+    return token.lower() in _PROSE_MARKERS
 
 
 def _strip_prose_marker(span: str) -> str:

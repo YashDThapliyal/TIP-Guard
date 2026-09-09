@@ -282,6 +282,11 @@ def test_try_base64_decode_rejects_invalid_padding() -> None:
         "3.14 vf gur inyhr bs cv sbe nal pvepyr",
         "Vg.f svar naq abg n znexre ng nyy urer",
         "1.21 tvtnjnggf vf jung gur pne arrqf",
+        # Marker-shaped but not an English marker: a caesar shift maps a real
+        # "U.S." to letters like these, so a shape rule ate real payloads.
+        "H.F. cbyvpl erdhverf n frpbaq fvtangher",
+        "A.B. pvcuregrkg fgnegf evtug urer",
+        "U.S. cbyvpl erdhverf n frpbaq fvtangher",
     ],
 )
 def test_a_marker_rule_does_not_truncate_real_ciphertext(span: str) -> None:
