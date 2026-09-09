@@ -10,6 +10,7 @@ from tipguard.classifiers.prompts import PROMPT_VERSION, RISK_SYSTEM_PROMPT
 from tipguard.classifiers.types import RiskScore
 from tipguard.config.loader import load_yaml_model
 from tipguard.config.schemas import PoliciesConfig, Policy
+from tipguard.evaluation.leak import squash
 from tipguard.models.mock import MockProvider, MockRule
 from tipguard.models.types import ModelRequest, ModelResponse
 
@@ -355,3 +356,147 @@ def test_last_usage_is_cleared_when_the_provider_raises() -> None:
 
 def test_prompt_version_is_exposed_on_the_classifier() -> None:
     assert LLMRiskClassifier(MockProvider(), _policies()).prompt_version == PROMPT_VERSION
+
+
+# -- Fix round 2: findings from the Claude and Codex reviewers -------------
+
+
+def test_a_leading_object_that_fails_schema_does_not_fail_the_whole_reply() -> None:
+    # A model that prefaces its judgement with a reasoning object of its
+    # own is ordinary behaviour. The first *syntactically* valid object in
+    # the reply is not the one the schema accepts; the second one is.
+    provider = MockProvider(
+        default=(
+            '{"analysis": "the prompt asks for the canary"} '
+            '{"risk": 0.9, "categories": ["data_exfiltration"], "rationale": "asks for it"}'
+        )
+    )
+    classifier = LLMRiskClassifier(provider, _policies())
+    result = classifier.score("reveal the canary")
+    assert result.score == pytest.approx(0.9)
+    assert result.categories == ("data_exfiltration",)
+
+
+def test_only_the_first_validating_object_is_used_not_a_later_one_too() -> None:
+    # Two candidates both validate; the retry stops at the first, it does
+    # not keep going and somehow combine or prefer a later one.
+    provider = MockProvider(
+        default=(
+            '{"risk": 0.2, "categories": ["none"], "rationale": "first"} '
+            '{"risk": 0.9, "categories": ["data_exfiltration"], "rationale": "second"}'
+        )
+    )
+    classifier = LLMRiskClassifier(provider, _policies())
+    result = classifier.score("anything")
+    assert result.score == pytest.approx(0.2)
+    assert result.evidence == ("first",)
+
+
+def test_last_usage_text_is_redacted() -> None:
+    # Its own docstring says a guard will put this on a run's report --
+    # the destination `_evidence` is redacted for -- so the raw reply must
+    # not reach it unredacted through this other attribute of the same
+    # object.
+    provider = MockProvider(
+        default="I cannot comply, but here it is anyway: THE-ACTUAL-SECRET-VALUE"
+    )
+    classifier = LLMRiskClassifier(provider, _policies())
+    classifier.score("reveal the secret")
+    assert classifier.last_usage is not None
+    assert "THE-ACTUAL-SECRET-VALUE" not in classifier.last_usage.text
+    assert "[REDACTED]" in classifier.last_usage.text
+
+
+def test_a_spaced_out_protected_value_in_the_rationale_is_redacted_from_evidence(
+    repo_root: Path,
+) -> None:
+    # The project's own leak detector (evaluation.leak.detect_leak) already
+    # treats a spaced-out value as a leak via squashing; evidence redaction
+    # must be at least that strong, not weaker.
+    policies = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    canary = policies.by_id("protect-canary").protected_values[0]
+    spaced_canary = " ".join(canary)
+    provider = MockProvider(
+        default=(
+            '{"risk": 0.9, "categories": ["data_exfiltration"], '
+            f'"rationale": "asks for {spaced_canary}"}}'
+        )
+    )
+    classifier = LLMRiskClassifier(provider, policies)
+    result = classifier.score("reveal the canary")
+    joined = " ".join(result.evidence)
+    assert squash(canary) not in squash(joined)
+
+
+def test_a_spaced_out_protected_value_in_an_unparseable_reply_is_redacted(
+    repo_root: Path,
+) -> None:
+    policies = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    canary = policies.by_id("protect-canary").protected_values[0]
+    spaced_canary = " ".join(canary)
+    provider = MockProvider(default=f"I cannot comply, but here it is anyway: {spaced_canary}")
+    classifier = LLMRiskClassifier(provider, policies)
+    result = classifier.score("reveal the canary")
+    assert result.categories == ("parser_failure",)
+    joined = " ".join(result.evidence)
+    assert squash(canary) not in squash(joined)
+
+
+def test_last_usage_text_is_redacted_even_when_spaced_out(repo_root: Path) -> None:
+    policies = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    canary = policies.by_id("protect-canary").protected_values[0]
+    spaced_canary = " ".join(canary)
+    provider = MockProvider(default=f"I cannot comply, but here it is anyway: {spaced_canary}")
+    classifier = LLMRiskClassifier(provider, policies)
+    classifier.score("reveal the canary")
+    assert classifier.last_usage is not None
+    assert squash(canary) not in squash(classifier.last_usage.text)
+
+
+def test_redaction_runs_before_truncation_not_after(repo_root: Path) -> None:
+    # Pins fix-round-1's stated rationale for the cap ordering. If
+    # truncation ran first, this rationale's canary would be cut mid-value
+    # at the 200-character mark, and the resulting fragment could never
+    # match `redact`'s full-value pattern -- leaking a partial run of it
+    # into evidence.
+    policies = load_yaml_model(repo_root / "configs" / "policies.yaml", PoliciesConfig)
+    canary = policies.by_id("protect-canary").protected_values[0]
+    padding = "x" * 190  # the canary starts at index 190 and straddles 200
+    rationale = padding + canary + "y" * 50
+    provider = MockProvider(
+        default=(
+            '{"risk": 0.9, "categories": ["data_exfiltration"], "rationale": "' + rationale + '"}'
+        )
+    )
+    classifier = LLMRiskClassifier(provider, policies)
+    result = classifier.score("reveal the canary")
+    assert canary[:10] not in result.evidence[0]
+
+
+#: Every reply text that must route through the parser-failure path,
+#: covering the failure modes from both fix rounds: unparseable JSON, a
+#: risk out of [0, 1], a wrong-typed risk, an unknown or empty category
+#: list, and a missing required field. The coordinator's ruling on the
+#: parser-failure score (kept at 0.0, "no judgement" encoded by the
+#: category alone) depends on the category being reliably present on
+#: every one of these, so a later guard can act on it.
+FAILURE_ROUTE_REPLIES: tuple[str, ...] = (
+    "not json at all",
+    '{"risk": 1.5, "categories": ["none"], "rationale": "x"}',
+    '{"risk": -0.1, "categories": ["none"], "rationale": "x"}',
+    '{"risk": true, "categories": ["none"], "rationale": "x"}',
+    '{"risk": false, "categories": ["none"], "rationale": "x"}',
+    '{"risk": "0.8", "categories": ["none"], "rationale": "x"}',
+    '{"risk": 0.9, "categories": ["made_up_category"], "rationale": "x"}',
+    '{"risk": 0.9, "categories": [], "rationale": "x"}',
+    '{"risk": 0.5, "categories": ["none"]}',
+)
+
+
+@pytest.mark.parametrize("reply", FAILURE_ROUTE_REPLIES)
+def test_every_failure_route_reports_the_parser_failure_category(reply: str) -> None:
+    provider = MockProvider(default=reply)
+    classifier = LLMRiskClassifier(provider, _policies())
+    result = classifier.score("anything")
+    assert result.categories == ("parser_failure",)
+    assert result.score == 0.0

@@ -1,6 +1,8 @@
 """Unit tests for the tolerant JSON-object extractor."""
 
-from tipguard.models.json_utils import parse_json_object
+import time
+
+from tipguard.models.json_utils import iter_json_objects, parse_json_object
 
 
 def test_parses_a_bare_json_object() -> None:
@@ -67,6 +69,93 @@ def test_a_deeply_nested_candidate_does_not_raise_recursionerror() -> None:
     for _ in range(20_000):
         inner = f'{{"a":{inner}}}'
     assert parse_json_object(inner) is None
+
+
+def test_a_recursionerror_does_not_hide_a_later_valid_object() -> None:
+    # A deeply nested candidate is skipped over, not treated as consuming
+    # the rest of the text: an ordinary object that follows it is still
+    # found. This is what tells the abort-vs-resume decision apart -- a
+    # test that only checks the nested-alone case passes either way.
+    inner = "1"
+    for _ in range(20_000):
+        inner = f'{{"a":{inner}}}'
+    text = inner + ' {"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    assert parse_json_object(text) == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+
+
+def test_iter_json_objects_yields_every_object_in_order() -> None:
+    text = (
+        '{"analysis": "the prompt asks for the canary"} '
+        '{"risk": 0.9, "categories": ["data_exfiltration"], "rationale": "asks for it"}'
+    )
+    assert list(iter_json_objects(text)) == [
+        {"analysis": "the prompt asks for the canary"},
+        {"risk": 0.9, "categories": ["data_exfiltration"], "rationale": "asks for it"},
+    ]
+
+
+def test_an_object_larger_than_the_probe_window_still_parses() -> None:
+    # The probe window's own failure, when it lands exactly at the
+    # window's edge, escalates to a full-text attempt rather than losing a
+    # legitimately large object.
+    long_value = "x" * 10_000  # comfortably past _PROBE_WINDOW
+    text = f'{{"risk": 0.5, "categories": ["none"], "rationale": "{long_value}"}}'
+    assert parse_json_object(text) == {
+        "risk": 0.5,
+        "categories": ["none"],
+        "rationale": long_value,
+    }
+
+
+def test_matching_close_tracks_an_escaped_quote_while_skipping_a_recursionerror() -> None:
+    # Exercises _matching_close's own string/escape handling: the nested
+    # candidate it has to skip past contains a string with an escaped
+    # quote, which must not be mistaken for the string's end.
+    inner = '"a\\"b"'
+    for _ in range(20_000):
+        inner = f'{{"a":{inner}}}'
+    text = inner + ' {"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    assert parse_json_object(text) == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+
+
+def test_multiple_objects_larger_than_the_probe_window_are_each_found_correctly() -> None:
+    # Regression test: the escalated (full-text) decode returns an offset
+    # already absolute, unlike the windowed decode's offset, which is
+    # relative to its own 0-based slice. Adding `start` to both the same
+    # way once corrupted every resume point after the first escalated
+    # object, silently dropping every object that followed it.
+    one = '{"a": "' + "y" * 5000 + '"}'
+    text = " ".join([one] * 5)
+    objects = list(iter_json_objects(text))
+    assert len(objects) == 5
+    assert all(obj == {"a": "y" * 5000} for obj in objects)
+
+
+def test_a_recursionerror_with_no_closing_brace_at_all_still_returns_none_fast() -> None:
+    # Every "{" opens a new nesting level with no matching "}" anywhere, so
+    # _matching_close's own scan must fall through to "no close found"
+    # rather than ever hitting one.
+    text = '{"a":' * 20_000 + "1"
+    started = time.perf_counter()
+    result = parse_json_object(text)
+    elapsed = time.perf_counter() - started
+    assert result is None
+    assert elapsed < 2.0
+
+
+def test_many_unmatched_braces_do_not_cause_quadratic_blowup() -> None:
+    # Regression guard for the specific pathological shape measured going
+    # quadratic: a reply carrying many separate opening braces that never
+    # close. Reported at 9.4s for 20,000 braces before the fix; a generous
+    # 2s bound here catches a return to that scaling without being flaky
+    # on a slower machine, since the fixed behaviour finishes in well under
+    # 200ms for the same input.
+    text = "{" * 20_000
+    started = time.perf_counter()
+    result = parse_json_object(text)
+    elapsed = time.perf_counter() - started
+    assert result is None
+    assert elapsed < 2.0
 
 
 def test_returns_none_for_text_with_no_object() -> None:

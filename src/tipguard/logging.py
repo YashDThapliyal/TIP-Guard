@@ -14,13 +14,47 @@ _LogArgs = tuple[object, ...] | Mapping[str, object]
 
 _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
 
+#: Below this many alphanumeric characters, a punctuation/whitespace-
+#: insensitive match is too permissive -- a short value's characters recur
+#: too often, in unrelated text, purely by chance. Mirrors
+#: `evaluation.leak._SQUASH_MIN_LENGTH`, which draws the same line for the
+#: same reason; `tests/test_logging.py` pins the two constants equal so they
+#: cannot silently drift apart. Not imported from there directly: this
+#: module sits below `evaluation` in the project's dependency order, and a
+#: shared magic number is a smaller coupling than a layering violation.
+_FUZZY_MIN_LENGTH = 10
+
+
+def _fuzzy_pattern(value: str) -> str | None:
+    """A regex matching `value` with any run of non-alphanumeric noise
+    tolerated between its letters and digits, or None if `value` is too
+    short for that to be safe.
+
+    A plain, literal `redact` misses a protected value written with spacing
+    or punctuation inserted -- "CANARY - 7f3a - KESTREL - 9021" for
+    "CANARY-7f3a-KESTREL-9021" -- even though `evaluation.leak.detect_leak`
+    already treats that as a leak via `squash`, which discards everything
+    but alphanumeric characters before comparing. This is that same
+    tolerance expressed as a regex rather than a post-hoc string
+    comparison, so it can drive `re.sub` at the actual matched span:
+    each alphanumeric character of `value` is matched literally, and
+    `[^A-Za-z0-9]*` between them consumes whatever separates them in the
+    text, including nothing. It does not tolerate extra letters or digits
+    being inserted -- neither does `squash`, which would no longer see the
+    same substring either.
+    """
+    alnum = [char for char in value if char.isalnum()]
+    if len(alnum) < _FUZZY_MIN_LENGTH:
+        return None
+    return r"[^A-Za-z0-9]*".join(re.escape(char) for char in alnum)
+
 
 def redact(text: str, protected_values: Iterable[str], placeholder: str = "[REDACTED]") -> str:
     values = sorted({value for value in protected_values if value}, key=len, reverse=True)
     if not values:
         return text
-    pattern = "|".join(re.escape(value) for value in values)
-    return re.sub(pattern, placeholder, text, flags=re.IGNORECASE)
+    patterns = [_fuzzy_pattern(value) or re.escape(value) for value in values]
+    return re.sub("|".join(patterns), placeholder, text, flags=re.IGNORECASE)
 
 
 def _redact_value(value: object, protected_values: tuple[str, ...]) -> object:

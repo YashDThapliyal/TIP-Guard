@@ -24,7 +24,7 @@ from tipguard.classifiers.prompts import (
 from tipguard.classifiers.types import RiskScore
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
-from tipguard.models.json_utils import parse_json_object
+from tipguard.models.json_utils import iter_json_objects
 from tipguard.models.types import ModelProvider, ModelRequest, ModelResponse
 
 #: `RiskScore.categories` a reply that never parsed, or parsed but failed
@@ -135,7 +135,12 @@ class LLMRiskClassifier:
         #: Cleared before the call rather than only after it, so a
         #: provider that raises leaves this None instead of stale from the
         #: previous, unrelated call -- a guard attributing usage per call
-        #: would otherwise double-count that previous response.
+        #: would otherwise double-count that previous response. Its `text`
+        #: is stored redacted, not raw: this is the attribute a guard is
+        #: documented to put on a run's report, which is exactly the
+        #: destination `_evidence` redacts *for* -- storing the reply
+        #: unredacted here would let a protected value out through the one
+        #: other attribute of the same object.
         self.last_usage: ModelResponse | None = None
         self._policies_summary = format_policies_summary(policies)
         self._protected_values: tuple[str, ...] = tuple(
@@ -151,23 +156,34 @@ class LLMRiskClassifier:
             max_tokens=MAX_TOKENS,
         )
         response = self.provider.complete(request)
-        self.last_usage = response
+        self.last_usage = response.model_copy(
+            update={"text": redact(response.text, self._protected_values)}
+        )
         return self._parse(response.text)
 
     def _parse(self, raw: str) -> RiskScore:
-        payload = parse_json_object(raw)
-        if payload is not None:
+        """The first candidate object in `raw` that validates, or failure.
+
+        `iter_json_objects` can yield more than one object -- a model that
+        prefaces its judgement with a reasoning object of its own,
+        `{"analysis": "..."}` ahead of the real `{"risk": ...}` reply, is
+        ordinary behaviour a schema-blind "first object wins" reading would
+        wrongly fail outright. Every candidate is tried in order and the
+        first one `RiskJudgement` accepts wins; if none do -- including
+        when there was only ever one, invalid candidate, or none at all --
+        the reply as a whole is a parser failure.
+        """
+        for payload in iter_json_objects(raw):
             try:
                 judgement = RiskJudgement.model_validate(payload)
             except ValidationError:
-                pass
-            else:
-                return RiskScore(
-                    score=judgement.risk,
-                    categories=tuple(judgement.categories),
-                    evidence=self._evidence(judgement.rationale),
-                    classifier=self.name,
-                )
+                continue
+            return RiskScore(
+                score=judgement.risk,
+                categories=tuple(judgement.categories),
+                evidence=self._evidence(judgement.rationale),
+                classifier=self.name,
+            )
         return RiskScore(
             score=0.0,
             categories=(PARSER_FAILURE_CATEGORY,),

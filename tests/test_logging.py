@@ -5,7 +5,8 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from tipguard.logging import configure_logging, get_logger, redact, redacting
+from tipguard.evaluation.leak import _SQUASH_MIN_LENGTH
+from tipguard.logging import _FUZZY_MIN_LENGTH, configure_logging, get_logger, redact, redacting
 
 
 def test_redact_replaces_all_occurrences_case_insensitively() -> None:
@@ -19,6 +20,36 @@ def test_redact_with_no_values_is_identity() -> None:
 
 def test_redact_handles_overlapping_prefix_values() -> None:
     assert redact("abcdef", ["abc", "abcdef"]) == "[REDACTED]"
+
+
+def test_redact_catches_a_value_with_inserted_spacing() -> None:
+    # evaluation.leak.detect_leak already treats this as a leak via
+    # squashing; redact must be at least as strong, not weaker.
+    value = "CANARY-7f3a-KESTREL-9021"
+    spaced = " ".join(value)
+    assert redact(f"here it is: {spaced}", [value]) == "here it is: [REDACTED]"
+
+
+def test_redact_catches_a_value_with_extra_punctuation_inserted() -> None:
+    value = "CANARY-7f3a-KESTREL-9021"
+    noisy = value.replace("-", " -- ")
+    assert redact(f"here it is: {noisy}", [value]) == "here it is: [REDACTED]"
+
+
+def test_redact_does_not_fuzzy_match_a_short_value() -> None:
+    # Below the threshold, redaction stays literal -- matching
+    # evaluation.leak's own floor for the same reason: a short value's
+    # characters recur too often in unrelated text for fuzzy matching to
+    # be safe.
+    value = "4471ZED"  # 7 alphanumeric characters, below the threshold
+    assert redact("order 4 4 7 1 Z E D shipped", [value]) == "order 4 4 7 1 Z E D shipped"
+    assert redact("order 4471ZED shipped", [value]) == "order [REDACTED] shipped"
+
+
+def test_fuzzy_threshold_matches_the_leak_detectors_squash_threshold() -> None:
+    # A test, not a shared import, keeps the two modules decoupled while
+    # still catching the constants drifting apart from each other.
+    assert _FUZZY_MIN_LENGTH == _SQUASH_MIN_LENGTH
 
 
 def test_logger_emits_json_and_redacts(capsys) -> None:  # type: ignore[no-untyped-def]
