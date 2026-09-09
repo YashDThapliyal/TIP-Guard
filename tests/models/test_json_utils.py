@@ -107,15 +107,34 @@ def test_an_object_larger_than_the_probe_window_still_parses() -> None:
     }
 
 
-def test_matching_close_tracks_an_escaped_quote_while_skipping_a_recursionerror() -> None:
-    # Exercises _matching_close's own string/escape handling: the nested
-    # candidate it has to skip past contains a string with an escaped
+def test_brace_matches_tracks_an_escaped_quote_while_skipping_a_recursionerror() -> None:
+    # Exercises _brace_matches's own string/escape handling: the nested
+    # candidate it has to look past contains a string with an escaped
     # quote, which must not be mistaken for the string's end.
     inner = '"a\\"b"'
     for _ in range(20_000):
         inner = f'{{"a":{inner}}}'
     text = inner + ' {"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
     assert parse_json_object(text) == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+
+
+def test_a_recursionerror_from_an_unclosed_candidate_does_not_swallow_a_later_object() -> None:
+    # The failed candidate's own opens never close at all here, unlike the
+    # balanced-but-too-deep case above -- a simple depth count from its own
+    # start would run all the way to the end of the text and consume a
+    # valid, self-contained object that happens to follow it. Ordinary LIFO
+    # bracket matching keeps the two separate: the trailing object's own
+    # brace is still resolved against its own close, regardless of what
+    # never closes underneath it. This is the case fix-round-2's abort
+    # (return `len(text)`) got wrong: it looks identical, by return value,
+    # to "closes exactly at the end of the text", so the search jumped
+    # straight past this object rather than finding it.
+    text = '{"a":' * 20_000 + '1 {"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    started = time.perf_counter()
+    result = parse_json_object(text)
+    elapsed = time.perf_counter() - started
+    assert result == {"risk": 0.5, "categories": ["none"], "rationale": "ok"}
+    assert elapsed < 2.0
 
 
 def test_multiple_objects_larger_than_the_probe_window_are_each_found_correctly() -> None:
@@ -133,8 +152,10 @@ def test_multiple_objects_larger_than_the_probe_window_are_each_found_correctly(
 
 def test_a_recursionerror_with_no_closing_brace_at_all_still_returns_none_fast() -> None:
     # Every "{" opens a new nesting level with no matching "}" anywhere, so
-    # _matching_close's own scan must fall through to "no close found"
-    # rather than ever hitting one.
+    # _brace_matches must record no match for any of them, and the scan
+    # must skip every one of those positions without retrying a full parse
+    # attempt at each -- otherwise this is right back to paying for a
+    # pathologically deep, doomed-to-fail parse once per nesting level.
     text = '{"a":' * 20_000 + "1"
     started = time.perf_counter()
     result = parse_json_object(text)

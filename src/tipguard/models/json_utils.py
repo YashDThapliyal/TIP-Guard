@@ -84,25 +84,32 @@ def _decode_at(decoder: json.JSONDecoder, text: str, start: int) -> tuple[Any, i
     return parsed, start + end
 
 
-def _matching_close(text: str, start: int) -> int:
-    """The index just past the `}` that closes `text[start]` (a `{`), or
-    `len(text)` if none closes it.
+def _brace_matches(text: str) -> dict[int, int]:
+    """Maps every `{` index in `text` to the index just past its matching
+    `}`, by ordinary LIFO bracket matching; a `{` with no match is absent.
 
     Iterative and non-recursive, tracking JSON string state so a brace
-    inside a string cannot end it early, unlike `json.loads`. Used only to
-    recover a cheap resume point after a `RecursionError`: retrying
-    `raw_decode` one character at a time on the same pathologically deep
-    candidate would cost roughly its size again for every nesting level,
-    since each retry re-parses everything up to nearly the same depth
-    before failing again. Finding the whole candidate's span in one
-    non-recursive pass and skipping past it costs that same size exactly
-    once.
+    inside a string cannot end it early, unlike `json.loads`. Computed once
+    per `iter_json_objects` call -- lazily, only if a `RecursionError` ever
+    actually occurs -- rather than once per failing candidate: a single
+    stack-based pass finds every position's match simultaneously, in the
+    same cost as one candidate-sized scan, so later lookups for *other*
+    candidates are then O(1) instead of each re-paying a scan of their own.
+
+    LIFO order is what keeps this correct where it matters here: an
+    earlier `{` that never closes stays on the stack, unresolved, rather
+    than absorbing a `}` that belongs to something opened after it. That
+    is what stops a deeply nested, never-closing candidate from swallowing
+    a valid, self-contained object that happens to follow it in the text --
+    the object's own `{` is pushed after the failed candidate's opens and
+    is still the most recent one on the stack when its own `}` arrives, so
+    it matches correctly regardless of what never closes underneath it.
     """
-    depth = 0
+    stack: list[int] = []
+    matches: dict[int, int] = {}
     in_string = False
     escaped = False
-    for index in range(start, len(text)):
-        char = text[index]
+    for index, char in enumerate(text):
         if in_string:
             if escaped:
                 escaped = False
@@ -114,12 +121,10 @@ def _matching_close(text: str, start: int) -> int:
         if char == '"':
             in_string = True
         elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return index + 1
-    return len(text)
+            stack.append(index)
+        elif char == "}" and stack:
+            matches[stack.pop()] = index + 1
+    return matches
 
 
 def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
@@ -145,16 +150,19 @@ def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
     span could skip a real object hiding inside it.
 
     A `RecursionError` -- from a candidate too deeply nested for
-    `raw_decode` to finish -- is handled differently: the search resumes
-    *after* that candidate's whole span (found via the cheap, non-recursive
-    `_matching_close`) rather than one character in. Retrying one character
-    at a time into the same nested candidate would still be pathologically
-    deep at nearly every one of those positions, so it would fail the same
-    way, close to the same cost, at every nesting level -- turning one
-    failed candidate into as many failed re-attempts as it has levels. This
-    also means a deeply nested but ultimately balanced object does not hide
-    an ordinary object that follows it: the search moves past the whole
-    failure rather than either giving up or re-descending into it.
+    `raw_decode` to finish -- is handled differently. The first one to
+    occur computes `_brace_matches` once, over the whole text, and every
+    later candidate position is then checked against that map *before*
+    `_decode_at` is tried at all: a `{` with no recorded match can never
+    be the start of a complete JSON object, by ordinary bracket-matching
+    logic, regardless of what caused any particular attempt at it to fail,
+    so there is nothing to gain by paying for that attempt. Without this,
+    resuming one character at a time into the same nested candidate would
+    retry the same pathologically deep parse at nearly every one of its
+    own nesting levels; this also means a deeply nested but ultimately
+    unmatched candidate does not hide an ordinary, self-contained object
+    that happens to follow it in the text -- see `_brace_matches` for why
+    that holds even though the candidate itself never closes.
 
     A caller that only wants the first object can use
     `next(iter_json_objects(text), None)` -- `parse_json_object` below does
@@ -165,15 +173,22 @@ def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
     """
     stripped = _strip_code_fence(text)
     decoder = json.JSONDecoder()
+    matches: dict[int, int] | None = None
     search_from = 0
     while True:
         start = stripped.find("{", search_from)
         if start == -1:
             return
+        if matches is not None and start not in matches:
+            search_from = start + 1
+            continue
         try:
             parsed, end = _decode_at(decoder, stripped, start)
         except RecursionError:
-            search_from = _matching_close(stripped, start)
+            if matches is None:
+                matches = _brace_matches(stripped)
+            close = matches.get(start)
+            search_from = close if close is not None else start + 1
             continue
         except json.JSONDecodeError:
             search_from = start + 1

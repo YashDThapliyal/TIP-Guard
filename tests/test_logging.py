@@ -2,11 +2,11 @@
 
 import json
 import logging
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from tipguard.evaluation.leak import _SQUASH_MIN_LENGTH
-from tipguard.logging import _FUZZY_MIN_LENGTH, configure_logging, get_logger, redact, redacting
+from tipguard.logging import configure_logging, get_logger, redact, redacting
 
 
 def test_redact_replaces_all_occurrences_case_insensitively() -> None:
@@ -16,6 +16,13 @@ def test_redact_replaces_all_occurrences_case_insensitively() -> None:
 
 def test_redact_with_no_values_is_identity() -> None:
     assert redact("hello", []) == "hello"
+
+
+def test_redact_ignores_a_whitespace_only_value() -> None:
+    # Non-empty (so it survives redact's own truthiness filter) but
+    # meaningless as a thing to search for -- matches evaluation.leak's own
+    # guard against the same input.
+    assert redact("hello   world", ["   "]) == "hello   world"
 
 
 def test_redact_handles_overlapping_prefix_values() -> None:
@@ -46,10 +53,55 @@ def test_redact_does_not_fuzzy_match_a_short_value() -> None:
     assert redact("order 4471ZED shipped", [value]) == "order [REDACTED] shipped"
 
 
-def test_fuzzy_threshold_matches_the_leak_detectors_squash_threshold() -> None:
-    # A test, not a shared import, keeps the two modules decoupled while
-    # still catching the constants drifting apart from each other.
-    assert _FUZZY_MIN_LENGTH == _SQUASH_MIN_LENGTH
+def test_redact_agrees_with_detect_leak_at_the_casefold_boundary() -> None:
+    # "straßeAB1" is 9 characters raw, but casefolds and squashes to
+    # "strasseab1" -- 10, exactly the threshold -- because "ß" folds to
+    # "ss". Thresholding on the raw value's own alphanumeric count instead
+    # of the casefolded, squashed one put this value on the wrong side of
+    # the line: exact-only where the detector already calls it a leak via
+    # fuzzy matching.
+    value = "straßeAB1"
+    assert len(value) == 9
+    assert redact("canary s t r a ß e A B 1 here", [value]) == "canary [REDACTED] here"
+
+
+def test_redact_matches_a_sharp_s_via_casefold_not_only_ascii_case() -> None:
+    # re.IGNORECASE is ASCII-shaped case-insensitivity; casefolding both
+    # sides is what makes "straße" and "STRASSE" the same text.
+    value = "straße1234"
+    assert redact("canary STRASSE1234 here", [value]) == "canary [REDACTED] here"
+
+
+def test_redact_merges_overlapping_matches_from_different_values() -> None:
+    # Reproduced by both reviewers: a regex alternation returns the
+    # leftmost match and stops, so whichever value matched first could end
+    # its span partway through a different value's occurrence, leaving a
+    # tail of it -- "CDEFG" here -- in the clear.
+    text = "log: ZZZ SECRET-TOKEN-ABCDEFG rest"
+    values = ["SECRET-TOKEN-ABCDEFG", "ZZZ SECRET TOKEN AB"]
+    assert redact(text, values) == "log: [REDACTED] rest"
+
+
+def test_redact_merges_abutting_matches_too() -> None:
+    # Two matches that touch but do not overlap must still merge into one
+    # placeholder, not two adjacent ones.
+    text = "aaaaaaaaaabbbbbbbbbb"
+    values = ["aaaaaaaaaa", "bbbbbbbbbb"]
+    assert redact(text, values) == "[REDACTED]"
+
+
+def test_redact_does_not_exponentially_backtrack_on_non_ascii_values() -> None:
+    # Reported: a value's non-ASCII alphanumeric characters also matched
+    # the old fuzzy pattern's ASCII-only separator class, making it
+    # ambiguous and exponential to backtrack -- 0.09s at 22 characters,
+    # 0.96s at 26, roughly hours at 40. This rewrite has no regex
+    # repetition to backtrack at all.
+    value = "é" * 12 + "Z"
+    text = "é" * 2_000
+    started = time.perf_counter()
+    redact(text, [value])
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0
 
 
 def test_logger_emits_json_and_redacts(capsys) -> None:  # type: ignore[no-untyped-def]

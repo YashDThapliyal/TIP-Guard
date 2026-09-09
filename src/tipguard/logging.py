@@ -9,52 +9,126 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import cast
 
+from tipguard.evaluation.leak import _SQUASH_MIN_LENGTH, _exact_word_pattern, squash
+
 #: The two shapes `logging` allows for `LogRecord.args`.
 _LogArgs = tuple[object, ...] | Mapping[str, object]
 
 _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
 
-#: Below this many alphanumeric characters, a punctuation/whitespace-
-#: insensitive match is too permissive -- a short value's characters recur
-#: too often, in unrelated text, purely by chance. Mirrors
-#: `evaluation.leak._SQUASH_MIN_LENGTH`, which draws the same line for the
-#: same reason; `tests/test_logging.py` pins the two constants equal so they
-#: cannot silently drift apart. Not imported from there directly: this
-#: module sits below `evaluation` in the project's dependency order, and a
-#: shared magic number is a smaller coupling than a layering violation.
-_FUZZY_MIN_LENGTH = 10
 
+def _casefold_projection(text: str) -> tuple[str, list[int]]:
+    """`text`, casefolded, and an index array mapping each character of the
+    result back to the index in `text` it came from.
 
-def _fuzzy_pattern(value: str) -> str | None:
-    """A regex matching `value` with any run of non-alphanumeric noise
-    tolerated between its letters and digits, or None if `value` is too
-    short for that to be safe.
-
-    A plain, literal `redact` misses a protected value written with spacing
-    or punctuation inserted -- "CANARY - 7f3a - KESTREL - 9021" for
-    "CANARY-7f3a-KESTREL-9021" -- even though `evaluation.leak.detect_leak`
-    already treats that as a leak via `squash`, which discards everything
-    but alphanumeric characters before comparing. This is that same
-    tolerance expressed as a regex rather than a post-hoc string
-    comparison, so it can drive `re.sub` at the actual matched span:
-    each alphanumeric character of `value` is matched literally, and
-    `[^A-Za-z0-9]*` between them consumes whatever separates them in the
-    text, including nothing. It does not tolerate extra letters or digits
-    being inserted -- neither does `squash`, which would no longer see the
-    same substring either.
+    Built character by character rather than by casefolding `text` in one
+    call: a single character can casefold to more than one (`"ß"` folds to
+    `"ss"`), so the index array has to be extended once per *folded*
+    character, not once per source character, to stay aligned with the
+    projection it indexes -- a `redact` that thresholds on the raw value's
+    own alphanumeric count, ignoring what casefolding can do to length,
+    disagreed with `evaluation.leak.detect_leak` (which thresholds on the
+    casefolded, squashed count) at exactly this boundary.
     """
-    alnum = [char for char in value if char.isalnum()]
-    if len(alnum) < _FUZZY_MIN_LENGTH:
-        return None
-    return r"[^A-Za-z0-9]*".join(re.escape(char) for char in alnum)
+    folded_chars: list[str] = []
+    index: list[int] = []
+    for i, char in enumerate(text):
+        for folded_char in char.casefold():
+            folded_chars.append(folded_char)
+            index.append(i)
+    return "".join(folded_chars), index
+
+
+def _alnum_projection(folded: str, folded_index: list[int]) -> tuple[str, list[int]]:
+    """`folded` with non-alphanumeric characters dropped, and `folded_index`
+    filtered the same way.
+
+    Mirrors `evaluation.leak.squash` character for character -- it has to,
+    since a value is redacted this way exactly when `detect_leak` would
+    call it leaked -- but keeps the position mapping `squash` throws away,
+    which `redact` needs to replace the matched span rather than just
+    detect it.
+    """
+    alnum_chars: list[str] = []
+    alnum_index: list[int] = []
+    for char, source in zip(folded, folded_index, strict=True):
+        if char.isalnum():
+            alnum_chars.append(char)
+            alnum_index.append(source)
+    return "".join(alnum_chars), alnum_index
+
+
+def _spans_for_value(
+    value: str,
+    folded: str,
+    folded_index: list[int],
+    squashed: str,
+    squashed_index: list[int],
+) -> Iterator[tuple[int, int]]:
+    """Every original-text span where `value` is leaked, by the same rule
+    `evaluation.leak.detect_leak` uses to decide *whether* it leaked: a
+    value short enough that fuzzy matching would be unsafe is found only
+    as a casefolded whole word (`evaluation.leak._exact_word_pattern`,
+    reused rather than re-derived, so the two can't disagree about what
+    counts as an exact match); everything else is found wherever its
+    squashed form occurs, tolerating whatever spacing or punctuation sits
+    between its characters.
+    """
+    if not value.strip():
+        return
+    squashed_value = squash(value)
+    if len(squashed_value) < _SQUASH_MIN_LENGTH:
+        for match in re.finditer(_exact_word_pattern(value), folded):
+            yield folded_index[match.start()], folded_index[match.end() - 1] + 1
+        return
+    for match in re.finditer(re.escape(squashed_value), squashed):
+        yield squashed_index[match.start()], squashed_index[match.end() - 1] + 1
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """`spans`, sorted, with any overlapping or abutting pair merged into
+    one.
+
+    Matching each protected value independently and only afterwards
+    combining the results is what keeps one value's match from leaving a
+    tail of another's inside it unredacted -- the previous, regex-
+    alternation-based `redact` picked whichever value's pattern matched
+    leftmost at a given position and stopped there, which could end one
+    match's span partway through a different value's occurrence.
+    """
+    if not spans:
+        return []
+    ordered = sorted(spans)
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def redact(text: str, protected_values: Iterable[str], placeholder: str = "[REDACTED]") -> str:
-    values = sorted({value for value in protected_values if value}, key=len, reverse=True)
+    values = tuple({value for value in protected_values if value})
     if not values:
         return text
-    patterns = [_fuzzy_pattern(value) or re.escape(value) for value in values]
-    return re.sub("|".join(patterns), placeholder, text, flags=re.IGNORECASE)
+    folded, folded_index = _casefold_projection(text)
+    squashed, squashed_index = _alnum_projection(folded, folded_index)
+    spans: list[tuple[int, int]] = []
+    for value in values:
+        spans.extend(_spans_for_value(value, folded, folded_index, squashed, squashed_index))
+    merged = _merge_spans(spans)
+    if not merged:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        pieces.append(text[cursor:start])
+        pieces.append(placeholder)
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 def _redact_value(value: object, protected_values: tuple[str, ...]) -> object:
