@@ -230,3 +230,57 @@ def _capture(log: logging.Logger) -> Iterator[list[logging.LogRecord]]:
     finally:
         log.removeHandler(handler)
         log.setLevel(previous)
+
+
+def test_redact_catches_a_short_value_against_adjacent_characters() -> None:
+    # Redaction is deliberately stronger than leak detection. `detect_leak`
+    # word-bounds a short value so an incidental character run does not
+    # inflate the measured leak rate; redaction cannot, because a value
+    # sitting against other characters is just as recoverable by a reader.
+    # Matching the detector exactly let the shipped "4471-ZED" survive
+    # verbatim here, against docs/safety-protocol.md's guarantee.
+    assert redact("model returned ID4471-ZED", ["4471-ZED"]) == "model returned ID[REDACTED]"
+    assert redact("x4471-ZEDy", ["4471-ZED"]) == "x[REDACTED]y"
+
+
+def test_redact_still_leaves_a_short_value_that_is_not_actually_present() -> None:
+    # The other side: being stronger than the detector must not mean
+    # redacting text that merely shares characters. "447 1ZED-9" is not the
+    # value, and neither rule may treat it as one.
+    text = "the id 447 1ZED-9 is unrelated"
+    assert redact(text, ["4471-ZED"]) == text
+
+
+def test_redaction_covers_everything_the_leak_detector_calls_a_leak() -> None:
+    # The property the shared matching module exists to guarantee, fuzzed
+    # rather than sampled: three review rounds went into two copies of this
+    # rule drifting apart, and the failure that matters is redaction being
+    # the weaker of the two. The alphabet carries the cases that broke
+    # earlier attempts -- characters that casefold to more than one, non-ASCII
+    # letters, underscores and separators.
+    import random
+
+    from tipguard.evaluation.leak import _value_leaked
+    from tipguard.matching import squash
+
+    alphabet = "abAB01 -_.ßÉéİﬁ東\t!"
+    rng = random.Random(20260909)
+    for _ in range(2000):
+        value = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 14)))
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        if not value.strip():
+            continue
+        if _value_leaked(value, text, squash(text)):
+            assert "[REDACTED]" in redact(text, [value]), (value, text)
+
+
+def test_logging_does_not_import_the_evaluation_layer() -> None:
+    # `evaluation.runner` imports this module, so importing `evaluation` back
+    # from here puts `logging` both above and below it. There is no cycle
+    # today only because `evaluation/__init__.py` is empty; one ordinary
+    # re-export there would turn this into an ImportError nobody predicted.
+    # The shared rule lives in `tipguard.matching`, a leaf, for that reason.
+    from pathlib import Path
+
+    source = Path("src/tipguard/logging.py").read_text(encoding="utf-8")
+    assert "tipguard.evaluation" not in source

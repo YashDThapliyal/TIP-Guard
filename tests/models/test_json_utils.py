@@ -197,3 +197,26 @@ def test_returns_none_when_the_balanced_value_is_not_an_object() -> None:
 
 def test_returns_none_for_empty_text() -> None:
     assert parse_json_object("") is None
+
+
+def test_an_unmatched_quote_does_not_hide_a_later_object() -> None:
+    # The brace map that keeps a deeply nested candidate from being retried
+    # at every one of its own nesting levels tracks JSON string state across
+    # the whole text. A stray quote -- an inch mark in prose, a truncated
+    # string -- left the scan inside a string for the remainder, so every
+    # later brace went unrecorded and the real judgement was skipped without
+    # ever being attempted. Nesting has to be deep enough to raise
+    # RecursionError, which is what builds the map at all.
+    judgement = '{"risk": 0.5, "categories": ["none"], "rationale": "ok"}'
+    deep = '{"a":' * 20_000 + "1" + "}" * 20_000
+    assert parse_json_object(f'{deep} the pipe is 3" wide. {judgement}') == {
+        "risk": 0.5,
+        "categories": ["none"],
+        "rationale": "ok",
+    }
+
+
+def test_an_unmatched_quote_before_a_deep_candidate_does_not_hide_it_either() -> None:
+    judgement = '{"risk": 0.9, "categories": ["pii"], "rationale": "x"}'
+    deep = '{"a":' * 20_000 + "1" + "}" * 20_000
+    assert parse_json_object(f'" {deep} {judgement}')["risk"] == 0.9

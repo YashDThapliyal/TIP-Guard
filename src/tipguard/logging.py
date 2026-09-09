@@ -4,12 +4,13 @@ import json
 import logging
 import re
 import sys
+from array import array
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import cast
 
-from tipguard.evaluation.leak import _SQUASH_MIN_LENGTH, _exact_word_pattern, squash
+from tipguard.matching import SQUASH_MIN_LENGTH, squash
 
 #: The two shapes `logging` allows for `LogRecord.args`.
 _LogArgs = tuple[object, ...] | Mapping[str, object]
@@ -17,21 +18,27 @@ _LogArgs = tuple[object, ...] | Mapping[str, object]
 _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
 
 
-def _casefold_projection(text: str) -> tuple[str, list[int]]:
-    """`text`, casefolded, and an index array mapping each character of the
-    result back to the index in `text` it came from.
+def _casefold_projection(text: str) -> tuple[str, "array[int] | None"]:
+    """`text` casefolded, and a map from each folded character back to the
+    source index it came from -- or `None` when that map is the identity.
 
-    Built character by character rather than by casefolding `text` in one
-    call: a single character can casefold to more than one (`"ß"` folds to
-    `"ss"`), so the index array has to be extended once per *folded*
-    character, not once per source character, to stay aligned with the
-    projection it indexes -- a `redact` that thresholds on the raw value's
-    own alphanumeric count, ignoring what casefolding can do to length,
-    disagreed with `evaluation.leak.detect_leak` (which thresholds on the
-    casefolded, squashed count) at exactly this boundary.
+    A single character can casefold to more than one (`"ß"` folds to `"ss"`),
+    so in general the map has to be extended once per *folded* character, not
+    once per source character, to stay aligned. A `redact` that ignored what
+    casefolding does to length disagreed with `detect_leak` at exactly this
+    boundary, which is why the map exists at all.
+
+    Expansion is rare, though, and building the map character by character
+    costs more than everything else `redact` does put together -- about a
+    second on a megabyte. So the length is checked first: when casefolding
+    left it unchanged, no character expanded, the map would be the identity,
+    and `None` says so instead of materialising a million integers.
     """
+    folded = text.casefold()
+    if len(folded) == len(text):
+        return folded, None
     folded_chars: list[str] = []
-    index: list[int] = []
+    index = array("i")
     for i, char in enumerate(text):
         for folded_char in char.casefold():
             folded_chars.append(folded_char)
@@ -39,48 +46,71 @@ def _casefold_projection(text: str) -> tuple[str, list[int]]:
     return "".join(folded_chars), index
 
 
-def _alnum_projection(folded: str, folded_index: list[int]) -> tuple[str, list[int]]:
-    """`folded` with non-alphanumeric characters dropped, and `folded_index`
-    filtered the same way.
+def _alnum_projection(folded: str, folded_index: "array[int] | None") -> tuple[str, "array[int]"]:
+    """`folded` with non-alphanumeric characters dropped, and the source
+    index of each character that survived.
 
-    Mirrors `evaluation.leak.squash` character for character -- it has to,
-    since a value is redacted this way exactly when `detect_leak` would
-    call it leaked -- but keeps the position mapping `squash` throws away,
-    which `redact` needs to replace the matched span rather than just
+    Mirrors `tipguard.matching.squash` character for character -- it has to,
+    since a long value is redacted wherever `detect_leak` would call it
+    leaked -- but keeps the position mapping `squash` throws away, which
+    `redact` needs in order to replace the matched span rather than merely
     detect it.
     """
-    alnum_chars: list[str] = []
-    alnum_index: list[int] = []
-    for char, source in zip(folded, folded_index, strict=True):
-        if char.isalnum():
-            alnum_chars.append(char)
-            alnum_index.append(source)
-    return "".join(alnum_chars), alnum_index
+    # Both built from generators rather than list comprehensions: the
+    # intermediate list of positions is one Python integer object per
+    # alphanumeric character, which on a megabyte of text costs more memory
+    # than everything else here combined.
+    alnum = "".join(char for char in folded if char.isalnum())
+    positions = (i for i, char in enumerate(folded) if char.isalnum())
+    if folded_index is None:
+        return alnum, array("i", positions)
+    return alnum, array("i", (folded_index[i] for i in positions))
+
+
+def _source(index: "array[int] | None", position: int) -> int:
+    """Where `position` in a projection came from in the original text."""
+    return position if index is None else index[position]
 
 
 def _spans_for_value(
     value: str,
+    text: str,
     folded: str,
-    folded_index: list[int],
+    folded_index: "array[int] | None",
     squashed: str,
-    squashed_index: list[int],
+    squashed_index: "array[int]",
 ) -> Iterator[tuple[int, int]]:
-    """Every original-text span where `value` is leaked, by the same rule
-    `evaluation.leak.detect_leak` uses to decide *whether* it leaked: a
-    value short enough that fuzzy matching would be unsafe is found only
-    as a casefolded whole word (`evaluation.leak._exact_word_pattern`,
-    reused rather than re-derived, so the two can't disagree about what
-    counts as an exact match); everything else is found wherever its
-    squashed form occurs, tolerating whatever spacing or punctuation sits
-    between its characters.
+    """Every original-text span where `value` has to be redacted.
+
+    Redaction is deliberately *stronger* than leak detection, not equal to
+    it. The two questions differ: `evaluation.leak.detect_leak` asks whether
+    a value leaked, and word-bounds a short value so an incidental character
+    run does not inflate the measured leak rate; redaction asks whether a
+    reader could recover the value, and a value sitting against other
+    characters is just as recoverable. Matching the detector exactly cost a
+    shipped value here -- "4471-ZED" survived verbatim inside
+    "model returned ID4471-ZED" -- against the guarantee in
+    `docs/safety-protocol.md`. So every literal occurrence is redacted
+    whatever its length, and the fuzzy, spacing-tolerant form is added on
+    top for values long enough that it is safe.
+
+    Being a superset of the detector is the invariant worth holding, and
+    `tests/test_logging.py` fuzzes it rather than resting on examples:
+    anything `_value_leaked` calls a leak, this must cover.
     """
     if not value.strip():
         return
     squashed_value = squash(value)
-    if len(squashed_value) < _SQUASH_MIN_LENGTH:
-        for match in re.finditer(_exact_word_pattern(value), folded):
-            yield folded_index[match.start()], folded_index[match.end() - 1] + 1
+    if len(squashed_value) < SQUASH_MIN_LENGTH:
+        # Literal, not word-bounded. A word-bounded match is a literal match
+        # with extra conditions, so scanning literally is strictly stronger
+        # and one pass rather than two.
+        for match in re.finditer(re.escape(value.casefold()), folded):
+            yield _source(folded_index, match.start()), _source(folded_index, match.end() - 1) + 1
         return
+    # Long values need only the squashed scan: text containing the value
+    # literally also contains it squashed, so this already covers every
+    # literal occurrence as well as the spaced and punctuated ones.
     for match in re.finditer(re.escape(squashed_value), squashed):
         yield squashed_index[match.start()], squashed_index[match.end() - 1] + 1
 
@@ -114,10 +144,15 @@ def redact(text: str, protected_values: Iterable[str], placeholder: str = "[REDA
     if not values:
         return text
     folded, folded_index = _casefold_projection(text)
-    squashed, squashed_index = _alnum_projection(folded, folded_index)
+    # The squashed projection is only consulted for values long enough to be
+    # matched fuzzily, and it costs a second pass over the text, so it is
+    # built once, on demand, and skipped entirely when every value is short.
+    squashed, squashed_index = "", array("i")
+    if any(len(squash(value)) >= SQUASH_MIN_LENGTH for value in values):
+        squashed, squashed_index = _alnum_projection(folded, folded_index)
     spans: list[tuple[int, int]] = []
     for value in values:
-        spans.extend(_spans_for_value(value, folded, folded_index, squashed, squashed_index))
+        spans.extend(_spans_for_value(value, text, folded, folded_index, squashed, squashed_index))
     merged = _merge_spans(spans)
     if not merged:
         return text

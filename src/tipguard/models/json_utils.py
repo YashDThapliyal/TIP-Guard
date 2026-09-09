@@ -105,6 +105,23 @@ def _brace_matches(text: str) -> dict[int, int]:
     is still the most recent one on the stack when its own `}` arrives, so
     it matches correctly regardless of what never closes underneath it.
     """
+    matches, unterminated = _scan_braces(text, respect_strings=True)
+    if unterminated:
+        # An unmatched quote -- an inch mark in prose, a truncated string --
+        # leaves the scan inside a string for the rest of the text, so every
+        # later brace goes unrecorded and a real object that follows is
+        # skipped without ever being tried. Redo the scan treating quotes as
+        # ordinary characters. That over-approximates: a brace inside a
+        # string may now be paired. Over-approximating is the safe direction
+        # here, because the map is only ever used to *skip* a candidate, so a
+        # spurious entry costs one parse attempt that fails normally, while a
+        # missing entry loses a valid object outright.
+        matches, _ = _scan_braces(text, respect_strings=False)
+    return matches
+
+
+def _scan_braces(text: str, *, respect_strings: bool) -> tuple[dict[int, int], bool]:
+    """`_brace_matches`' single pass, and whether it ended inside a string."""
     stack: list[int] = []
     matches: dict[int, int] = {}
     in_string = False
@@ -118,13 +135,13 @@ def _brace_matches(text: str) -> dict[int, int]:
             elif char == '"':
                 in_string = False
             continue
-        if char == '"':
+        if respect_strings and char == '"':
             in_string = True
         elif char == "{":
             stack.append(index)
         elif char == "}" and stack:
             matches[stack.pop()] = index + 1
-    return matches
+    return matches, in_string
 
 
 def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
