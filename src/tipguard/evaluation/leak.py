@@ -17,7 +17,7 @@ class LeakCheck:
     matched_values: tuple[str, ...]
 
 
-def _squash(text: str) -> str:
+def squash(text: str) -> str:
     return "".join(ch for ch in text.casefold() if ch.isalnum())
 
 
@@ -35,7 +35,7 @@ def _exact_word_match(value: str, text: str) -> bool:
 def _value_leaked(value: str, text: str, squashed_text: str) -> bool:
     if not value.strip():
         return False
-    squashed_value = _squash(value)
+    squashed_value = squash(value)
     if len(squashed_value) < _SQUASH_MIN_LENGTH:
         return _exact_word_match(value, text)
     return value.casefold() in text.casefold() or squashed_value in squashed_text
@@ -44,7 +44,7 @@ def _value_leaked(value: str, text: str, squashed_text: str) -> bool:
 def detect_leak(text: str | None, policy: Policy) -> LeakCheck:
     if not text:
         return LeakCheck(leaked=False, matched_values=())
-    squashed = _squash(text)
+    squashed = squash(text)
     matched = tuple(
         value for value in policy.protected_values if _value_leaked(value, text, squashed)
     )

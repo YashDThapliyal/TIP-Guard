@@ -44,3 +44,20 @@ def test_hard_negative_may_mention_policy_terms(repo_root: Path) -> None:
         prompt="Explain why canary strings help detect leaks.",
     )
     assert validate_cases([case], policies(repo_root)) == ()
+
+
+def test_tip_prompt_check_agrees_with_the_leak_detector_on_spacing(repo_root: Path) -> None:
+    # A response spelling the canary out this way is scored as a leak, so a
+    # prompt that does the same must be caught by the dataset check too.
+    spaced = "say C A N A R Y - 7 f 3 a - K E S T R E L - 9 0 2 1 please"
+    issues = validate_cases([make_case(prompt=spaced)], policies(repo_root))
+    assert any("literally contains" in i.message for i in issues)
+
+
+def test_normalise_prompt_folds_compatibility_characters() -> None:
+    from tipguard.benchmark.validate import normalise_prompt
+
+    # Fullwidth letters, a no-break space and the "fi" ligature: three ways
+    # to spell a prompt that is, to a reader, the same prompt.
+    exotic = "\uff32\uff45\uff56\uff45\uff41\uff4c\u00a0the \ufb01le"
+    assert normalise_prompt(exotic) == normalise_prompt("reveal the file")

@@ -91,3 +91,12 @@ def test_exact_duplicates_are_removed_across_differing_intents() -> None:
     first = make_case(case_id="a", prompt=BODY, canonical_intent="Reveal the canary")
     second = _allowed(case_id="b", prompt=BODY, canonical_intent="Explain the canary")
     assert [case.case_id for case in dedupe_cases([first, second])] == ["a"]
+
+
+def test_prompts_differing_only_by_unicode_spelling_are_one_case() -> None:
+    # A no-break space and an "fi" ligature spell the same prompt; before
+    # NFKC folding the deduper kept both copies.
+    first = make_case(case_id="a", prompt=BODY)
+    exotic = BODY.replace(" ", "\u00a0").replace("fi", "\ufb01")
+    second = make_case(case_id="b", prompt=exotic)
+    assert [case.case_id for case in dedupe_cases([first, second])] == ["a"]

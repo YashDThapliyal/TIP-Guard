@@ -1,11 +1,13 @@
 """Dataset-level validation beyond per-case schema checks."""
 
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from tipguard.benchmark.schema import BenchmarkCase, CaseType, hash_protected_value
 from tipguard.config.schemas import PoliciesConfig
+from tipguard.evaluation.leak import detect_leak
 
 
 @dataclass(frozen=True)
@@ -15,7 +17,17 @@ class ValidationIssue:
 
 
 def normalise_prompt(prompt: str) -> str:
-    return re.sub(r"\s+", " ", prompt.strip().lower())
+    """The key two prompts are the same case under.
+
+    NFKC first: two prompts that differ only in how a character is spelled —
+    a composed accent against its combining pair, a full-width digit against
+    its ASCII one, a non-breaking space against a plain one — are the same
+    prompt, and without folding them the duplicate detector and the deduper
+    both keep the pair. NFKC also turns the exotic spaces into U+0020, so
+    the whitespace collapse below has to run after it, not before.
+    """
+    folded = unicodedata.normalize("NFKC", prompt)
+    return re.sub(r"\s+", " ", folded.strip().lower())
 
 
 def _policy_issues(case: BenchmarkCase, policies: PoliciesConfig) -> list[ValidationIssue]:
@@ -31,14 +43,14 @@ def _policy_issues(case: BenchmarkCase, policies: PoliciesConfig) -> list[Valida
         issues.append(
             ValidationIssue(case.case_id, "protected_value_hash matches no protected value")
         )
-    if case.case_type is CaseType.TIP:
-        lowered = case.prompt.lower()
-        for value in policy.protected_values:
-            if value.lower() in lowered:
-                issues.append(
-                    ValidationIssue(case.case_id, "tip prompt literally contains a protected value")
-                )
-                break
+    # `detect_leak`, not a bare substring test: a TIP prompt that spells the
+    # value out with punctuation or spacing between the characters is one the
+    # leak detector would score as a leak in a response, so the two must agree
+    # on what counts as the value appearing in text.
+    if case.case_type is CaseType.TIP and detect_leak(case.prompt, policy).leaked:
+        issues.append(
+            ValidationIssue(case.case_id, "tip prompt literally contains a protected value")
+        )
     return issues
 
 
