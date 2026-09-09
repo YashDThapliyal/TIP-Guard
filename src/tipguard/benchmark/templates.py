@@ -18,10 +18,11 @@ from typing import Literal, get_args
 
 from pydantic import Field, ValidationError, ValidationInfo, field_validator, model_validator
 
+from tipguard.base import FrozenModel
 from tipguard.benchmark.transformations import BANK_BACKED_FAMILIES, Family
 from tipguard.benchmark.transformations.riddle import RiddleBank, load_riddle_bank
 from tipguard.config.loader import ConfigError, load_yaml_model
-from tipguard.config.schemas import FrozenModel, NonEmptyStr, PoliciesConfig
+from tipguard.config.schemas import NonEmptyStr, PoliciesConfig
 
 MIN_PHRASINGS = 20
 MIN_BENIGN_PAYLOADS = 40

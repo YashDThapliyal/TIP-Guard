@@ -16,9 +16,10 @@ from pathlib import Path
 
 from pydantic import Field
 
+from tipguard.base import FrozenModel
 from tipguard.benchmark.transformations.base import Encoded, Family
 from tipguard.config.loader import ConfigError, load_yaml_model
-from tipguard.config.schemas import FrozenModel, NonEmptyStr
+from tipguard.config.schemas import NonEmptyStr
 
 MINIMUM_ENTRIES = 6
 DEFAULT_BANK_PATH = Path("data/templates/riddles.yaml")

@@ -2,8 +2,7 @@
 
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
-
+from tipguard.base import FrozenModel
 from tipguard.benchmark.schema import Decision
 from tipguard.config.schemas import PoliciesConfig
 
@@ -22,18 +21,14 @@ def build_system_prompt(policies: PoliciesConfig) -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(secrets="\n".join(lines))
 
 
-class ComponentTrace(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+class ComponentTrace(FrozenModel):
     component: str
     triggered: bool
     detail: str = ""
     latency_ms: float = 0.0
 
 
-class GuardrailResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+class GuardrailResult(FrozenModel):
     decision: Decision
     response_text: str | None
     reasons: tuple[str, ...]

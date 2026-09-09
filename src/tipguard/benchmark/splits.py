@@ -24,9 +24,9 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 
+from tipguard.base import FrozenModel
 from tipguard.benchmark.schema import BenchmarkCase, Split
 from tipguard.benchmark.transformations.base import Family
-from tipguard.config.schemas import FrozenModel
 
 #: Floating-point slack allowed when the three ratios are summed.
 RATIO_TOLERANCE = 1e-9

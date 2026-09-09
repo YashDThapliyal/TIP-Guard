@@ -3,7 +3,9 @@
 import hashlib
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
+
+from tipguard.base import FrozenModel
 
 
 class CaseType(StrEnum):
@@ -36,9 +38,7 @@ def hash_protected_value(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-class BenchmarkCase(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class BenchmarkCase(FrozenModel):
     case_id: str
     policy_id: str | None
     case_type: CaseType

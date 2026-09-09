@@ -2,8 +2,7 @@
 
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
-
+from tipguard.base import FrozenModel
 from tipguard.logging import get_logger
 
 Role = Literal["system", "user", "assistant"]
@@ -13,14 +12,12 @@ JSON_INSTRUCTION = "\nRespond with a single JSON object and nothing else."
 _log = get_logger("models")
 
 
-class Message(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class Message(FrozenModel):
     role: Role
     content: str
 
 
-class ModelRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class ModelRequest(FrozenModel):
     messages: tuple[Message, ...]
     # None means "use the provider's ModelSpec default" — see OpenAIProvider
     # and AnthropicProvider .complete().
@@ -55,8 +52,7 @@ class ModelRequest(BaseModel):
         return ""
 
 
-class ModelResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
+class ModelResponse(FrozenModel):
     text: str
     model: str
     provider: str

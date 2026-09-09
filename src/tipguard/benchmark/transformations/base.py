@@ -4,7 +4,9 @@ import random
 from enum import StrEnum
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
+
+from tipguard.base import FrozenModel
 
 
 class Family(StrEnum):
@@ -20,15 +22,13 @@ class Family(StrEnum):
     NONE = "none"
 
 
-class Encoded(BaseModel):
+class Encoded(FrozenModel):
     """The result of applying a transformation to a secret payload.
 
     `hint` is a short human phrase naming the transformation, used by
     difficulty-level wrappers, e.g. "base64" or
     "a Caesar cipher shifted forward by 3".
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     payload: str
     family: Family

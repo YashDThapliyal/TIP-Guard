@@ -3,15 +3,13 @@
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import Field, StringConstraints
+
+from tipguard.base import FrozenModel
 
 ProviderName = Literal["mock", "openai", "anthropic", "ollama"]
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
-class FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class ModelSpec(FrozenModel):

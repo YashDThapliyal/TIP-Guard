@@ -4,15 +4,12 @@ import math
 from collections import defaultdict
 from collections.abc import Sequence
 
-from pydantic import BaseModel, ConfigDict
-
+from tipguard.base import FrozenModel
 from tipguard.benchmark.schema import CaseType, Decision, Split
 from tipguard.guardrail.types import ComponentTrace
 
 
-class CaseRecord(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+class CaseRecord(FrozenModel):
     case_id: str
     case_type: CaseType
     transformation: str
@@ -37,9 +34,7 @@ class CaseRecord(BaseModel):
     latency_ms: float
 
 
-class TypeSummary(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+class TypeSummary(FrozenModel):
     count: int
     blocked: int
     clarified: int
@@ -50,9 +45,7 @@ class TypeSummary(BaseModel):
     cached_model_calls: int
 
 
-class RunSummary(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
+class RunSummary(FrozenModel):
     total: int
     by_type: dict[str, TypeSummary]
     total_cost_usd: float

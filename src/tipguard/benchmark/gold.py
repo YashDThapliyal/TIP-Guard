@@ -17,8 +17,9 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
+from tipguard.base import FrozenModel
 from tipguard.benchmark.io import DatasetError
 from tipguard.benchmark.schema import BenchmarkCase
 
@@ -36,7 +37,7 @@ Stratum = tuple[str, str, int]
 VERDICTS: tuple[Verdict, ...] = ("correct", "label_error", "prompt_error")
 
 
-class GoldReview(BaseModel):
+class GoldReview(FrozenModel):
     """One reviewer's ruling on one sampled case.
 
     `verdict` separates the two ways a case can be wrong: `label_error` means
@@ -44,8 +45,6 @@ class GoldReview(BaseModel):
     canonical intent and the policy, and `prompt_error` means the prompt itself
     does not ask what the case says it asks.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     case_id: str
     reviewer: str

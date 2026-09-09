@@ -6,9 +6,9 @@ from typing import Literal, get_args
 
 from pydantic import Field, ValidationInfo, field_validator
 
+from tipguard.base import FrozenModel
 from tipguard.benchmark.templates import FramingId
 from tipguard.benchmark.transformations.base import Family
-from tipguard.config.schemas import FrozenModel
 
 #: The families used for attack cases. `reverse` is excluded: reversing a
 #: sentence hides nothing from a competent reader, so it is a benign control
