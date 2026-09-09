@@ -8,6 +8,7 @@ from tipguard.classifiers.types import RiskScore
 from tipguard.config.loader import load_yaml_model
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.guardrail.output_guard import OutputGuard
+from tipguard.models.types import ModelResponse
 
 
 @pytest.fixture(scope="module")
@@ -19,6 +20,10 @@ class StubClassifier:
     """A classifier that returns whatever verdict a test needs."""
 
     name = "stub"
+    #: Required by `RiskClassifier`: a classifier that makes no model call
+    #: still has to say so, or a guard cannot tell it apart from one whose
+    #: usage went missing.
+    last_usage: ModelResponse | None = None
 
     def __init__(self, score: float, categories: tuple[str, ...] = ("none",)) -> None:
         self._verdict = RiskScore(
@@ -48,19 +53,37 @@ def test_a_spaced_out_value_is_still_a_leak(policies: PoliciesConfig) -> None:
     assert OutputGuard(policies).check(f"here it is: {spaced}").blocked
 
 
-def test_the_leak_scan_covers_every_policy_not_just_a_hinted_one(
-    policies: PoliciesConfig,
-) -> None:
-    # A model steered towards one secret can return a different one, and the
-    # guard is never told which policy a prompt was aiming at. Passing a hint
-    # for one policy must not narrow the scan away from the others.
-    other = policies.policies[2]
-    check = OutputGuard(policies).check(
-        f"unrelated answer mentioning {other.protected_values[0]}",
-        policy_hint=policies.policies[0].policy_id,
-    )
+@pytest.mark.parametrize("index", range(6))
+def test_the_leak_scan_covers_every_policy(index: int, policies: PoliciesConfig) -> None:
+    # A model steered towards one secret can return a different one, and a
+    # real deployment does not know which policy a prompt was aiming at, so
+    # the guard cannot either. Every shipped policy is checked, not a sample.
+    policy = policies.policies[index]
+    check = OutputGuard(policies).check(f"unrelated answer: {policy.protected_values[0]}")
     assert check.blocked
-    assert f"output_guard:leak:{other.policy_id}" in check.reasons
+    assert f"output_guard:leak:{policy.policy_id}" in check.reasons
+
+
+def test_a_classifier_that_did_not_run_is_still_recorded(policies: PoliciesConfig) -> None:
+    # "Did not run" and "ran and found nothing" are different facts, and a
+    # run computing an output-score or parser-failure rate needs to tell them
+    # apart rather than meeting a hole it cannot interpret.
+    secret = policies.policies[0].protected_values[0]
+    on_leak = OutputGuard(policies, output_classifier=StubClassifier(0.9)).check(f"value {secret}")
+    on_empty = OutputGuard(policies, output_classifier=StubClassifier(0.9)).check("")
+    stages = [t for t in on_leak.traces if t.component == "output_guard.classifier"]
+    assert [t.detail for t in stages] == ["skipped:leak"]
+    empty_stages = [t for t in on_empty.traces if t.component == "output_guard.classifier"]
+    assert [t.detail for t in empty_stages] == ["skipped:empty_answer"]
+
+
+def test_the_result_is_immutable(policies: PoliciesConfig) -> None:
+    # It is the one object here holding cleartext protected values.
+    import pydantic
+
+    check = OutputGuard(policies).check("clean")
+    with pytest.raises(pydantic.ValidationError):
+        check.blocked = True  # type: ignore[misc]
 
 
 def test_a_clean_answer_is_allowed(policies: PoliciesConfig) -> None:

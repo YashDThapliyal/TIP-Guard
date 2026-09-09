@@ -12,6 +12,7 @@ from tipguard.guardrail.output_guard import OutputGuard
 from tipguard.guardrail.threshold import ThresholdGuard
 from tipguard.guardrail.types import SAFE_REFUSAL
 from tipguard.models.mock import MockProvider, MockRule
+from tipguard.models.types import ModelRequest, ModelResponse
 
 
 @pytest.fixture(scope="module")
@@ -21,6 +22,10 @@ def policies() -> PoliciesConfig:
 
 class StubClassifier:
     name = "stub"
+    #: Required by `RiskClassifier`: a classifier that makes no model call
+    #: still has to say so, or a guard cannot tell it apart from one whose
+    #: usage went missing.
+    last_usage: ModelResponse | None = None
 
     def __init__(self, score: float, categories: tuple[str, ...] = ("none",)) -> None:
         self._verdict = RiskScore(
@@ -130,9 +135,8 @@ def test_a_cached_response_is_counted_as_cached() -> None:
     # A cached call costs no latency; counting it as a live one would flatten
     # the percentiles a run reports.
     class CachedOnce(MockProvider):
-        def complete(self, request: object) -> object:
-            response = super().complete(request)  # type: ignore[arg-type]
-            return response.model_copy(update={"cached": True})
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            return super().complete(request).model_copy(update={"cached": True})
 
     result = _guard(main_model=CachedOnce(default="answer")).run("x")
     assert result.model_calls == 1

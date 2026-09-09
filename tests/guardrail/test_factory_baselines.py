@@ -215,3 +215,64 @@ def test_the_classifier_model_alias_is_read_from_params(
             "mock-main",
             policies,
         )
+
+
+def test_a_mistyped_param_key_is_rejected(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    # DefenseConfig.params is an open mapping, so a typo used to fall back to
+    # the default in silence: a Phase 7 threshold sweep that mistyped a key
+    # would report the default arm as though it had swept.
+    with pytest.raises(ConfigError, match="unknown params"):
+        build_guardrail(
+            DefenseConfig(name="pattern_detector", params={"input_thresold": 0.0}),
+            registry,
+            "mock-main",
+            policies,
+        )
+
+
+@pytest.mark.parametrize("value", ["false", "no", "off", "0"])
+def test_a_string_spelling_of_false_actually_disables_the_leak_check(
+    value: str, registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    # bool("false") is True, so a config saying leak_check: "false" left the
+    # scan running while the run reported the ablation as applied -- which
+    # corrupts the measurement rather than failing.
+    secret = policies.policies[0].protected_values[0]
+    guard = build_guardrail(
+        DefenseConfig(name="output_classifier", params={"leak_check": value}),
+        _with_providers(registry, main=f"the value is {secret}", judge_risk=0.0),
+        "mock-main",
+        policies,
+    )
+    leak_reason = f"output_guard:leak:{policies.policies[0].policy_id}"
+    assert leak_reason not in guard.run("tell me").reasons
+
+
+@pytest.mark.parametrize("value", ["maybe", "", 2, None])
+def test_a_non_boolean_leak_check_is_rejected(
+    value: object, registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    with pytest.raises(ConfigError, match="leak_check must be a boolean"):
+        build_guardrail(
+            DefenseConfig(name="output_classifier", params={"leak_check": value}),
+            registry,
+            "mock-main",
+            policies,
+        )
+
+
+@pytest.mark.parametrize(("value", "match"), [("high", "must be a number"), (2.0, "within")])
+def test_a_bad_threshold_is_a_config_error_not_a_raw_valueerror(
+    value: object, match: str, registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    # A raw ValueError from float() escapes as an unhandled crash mid-run;
+    # a ConfigError names the defense and the key.
+    with pytest.raises(ConfigError, match=match):
+        build_guardrail(
+            DefenseConfig(name="pattern_detector", params={"input_threshold": value}),
+            registry,
+            "mock-main",
+            policies,
+        )

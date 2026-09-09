@@ -6,6 +6,7 @@ policy violation can be caught -- and the only place an exact leak of a
 protected value can be caught at all.
 """
 
+from tipguard.base import FrozenModel
 from tipguard.classifiers.types import PARSER_FAILURE_CATEGORY, RiskClassifier
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.evaluation.leak import detect_leak
@@ -14,26 +15,21 @@ from tipguard.models.types import ModelResponse
 from .types import ComponentTrace
 
 
-class OutputCheck:
-    """Whether an answer may be returned, and why not if it may not."""
+class OutputCheck(FrozenModel):
+    """Whether an answer may be returned, and why not if it may not.
 
-    __slots__ = ("blocked", "leaked_values", "reasons", "score", "traces", "usage")
+    Frozen like every other result type in this package. It is also the one
+    object in the design that holds cleartext protected values, in
+    `leaked_values`, so a consumer in a later task cannot quietly mutate or
+    extend it.
+    """
 
-    def __init__(
-        self,
-        blocked: bool,
-        reasons: tuple[str, ...],
-        leaked_values: tuple[str, ...],
-        score: float | None,
-        traces: tuple[ComponentTrace, ...] = (),
-        usage: ModelResponse | None = None,
-    ) -> None:
-        self.blocked = blocked
-        self.reasons = reasons
-        self.leaked_values = leaked_values
-        self.score = score
-        self.traces = traces
-        self.usage = usage
+    blocked: bool
+    reasons: tuple[str, ...]
+    leaked_values: tuple[str, ...]
+    score: float | None
+    traces: tuple[ComponentTrace, ...] = ()
+    usage: ModelResponse | None = None
 
 
 class OutputGuard:
@@ -60,14 +56,15 @@ class OutputGuard:
         self._threshold = threshold
         self._leak_check = leak_check
 
-    def check(self, text: str | None, policy_hint: str | None = None) -> OutputCheck:
-        """Judge `text`.
+    def check(self, text: str | None) -> OutputCheck:
+        """Judge `text` against every policy.
 
-        `policy_hint` is accepted so a caller that does know the target
-        policy can pass it, and is deliberately unused for the leak scan:
-        narrowing to it would let a model that disclosed a *different*
-        secret through. It is recorded in the trace so a run can show the
-        hint was available and not acted on.
+        There is deliberately no way to tell this which policy a prompt was
+        aiming at. The `Guardrail` protocol does not carry one, because a
+        real deployment does not know it either, and narrowing the scan would
+        let a model that disclosed a *different* secret through. An earlier
+        version took a hint it never used; the parameter is gone rather than
+        left to imply a capability this does not have.
         """
         reasons: list[str] = []
         leaked: list[str] = []
@@ -87,7 +84,7 @@ class OutputGuard:
                     # rendered and stored, and naming them here would put the
                     # protected value in the report that exists to prove it
                     # was caught.
-                    detail=policy_hint or "",
+                    detail="",
                 )
             )
 
@@ -119,6 +116,19 @@ class OutputGuard:
                     triggered=failed or score >= self._threshold,
                     detail="parser_failure" if failed else f"{score}",
                     latency_ms=usage.latency_ms if usage is not None else 0.0,
+                )
+            )
+
+        elif self._classifier is not None:
+            # The classifier exists but did not run: the answer was empty, or
+            # a leak already settled the decision. Recorded rather than
+            # omitted, so a run computing an output-score or parser-failure
+            # rate sees "did not run" instead of a hole it cannot interpret.
+            traces.append(
+                ComponentTrace(
+                    component="output_guard.classifier",
+                    triggered=False,
+                    detail="skipped:leak" if leaked else "skipped:empty_answer",
                 )
             )
 
