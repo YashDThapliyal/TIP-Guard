@@ -792,10 +792,13 @@ def _extract_base64(text: str) -> str | None:
     does, but is not impossible for a short one); the longest is preferred,
     matching the extraction rule the brief states for the canonicalizer.
     """
-    runs = (
-        match.group()
-        for match in BASE64_CANDIDATE.finditer(_strip_prose_marker(text, BASE64_ALPHABET))
-    )
+    # No marker preprocessing here. `BASE64_CANDIDATE` already scans for a
+    # run of base64 characters anywhere in the text, so a label in front of
+    # the payload never reached it -- while stripping a leading token *did*
+    # reach the payload: "V2hhdCBpcyB0aGU=. That is the message." lost the
+    # payload itself, because its trailing full stop made the whole token
+    # look like a label.
+    runs = (match.group() for match in BASE64_CANDIDATE.finditer(text))
     for candidate in sorted(runs, key=len, reverse=True):
         if _try_base64_decode(candidate) is not None:
             return candidate

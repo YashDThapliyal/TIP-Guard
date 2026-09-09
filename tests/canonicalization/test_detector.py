@@ -316,3 +316,19 @@ def test_a_marker_is_kept_when_nothing_substantial_remains() -> None:
 
     # Never strip the payload away, whatever the alphabet says.
     assert _strip_prose_marker("P.S. .--", MORSE_ALPHABET) == "P.S. .--"
+
+
+def test_a_base64_payload_ending_in_punctuation_survives() -> None:
+    # Preprocessing the whole prompt with the marker rule deleted this
+    # outright: the trailing full stop put a character outside the base64
+    # alphabet in the token, so the payload itself looked like a label. The
+    # candidate regex already scans for a base64 run anywhere in the text, so
+    # the preprocessing was never needed either.
+    text = "V2hhdCBpcyB0aGUgbmFtZQ==. That is the message."
+    detection = TransformationDetector().detect(text)
+    assert detection.family is Family.BASE64
+
+
+def test_a_base64_payload_behind_a_label_is_still_found() -> None:
+    text = "P.S. V2hhdCBpcyB0aGUgbmFtZQ=="
+    assert TransformationDetector().detect(text).family is Family.BASE64
