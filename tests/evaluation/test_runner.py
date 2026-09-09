@@ -9,13 +9,15 @@ import pytest
 from tipguard.benchmark.schema import CaseType, Decision
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
+from tipguard.evaluation import run_dir as run_dir_module
 from tipguard.evaluation import runner as runner_module
-from tipguard.evaluation.runner import (
+from tipguard.evaluation.run_dir import (
+    RESERVE_ATTEMPTS,
     RUN_ARTIFACTS,
     RUN_COMPLETE_MARKER,
     RUN_OWNER_MARKER,
-    run_experiment,
 )
+from tipguard.evaluation.runner import run_experiment
 from tipguard.models import types as model_types
 from tipguard.models.cache import ResponseCache
 from tipguard.models.types import ProviderError
@@ -411,7 +413,7 @@ def test_a_run_in_progress_is_refused_rather_than_resumed(
     monkeypatch.chdir(repo_root)
     monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
     run_dir = tmp_path / "in-flight"
-    runner_module._reserve_run_dir(run_dir)  # stands in for the live run
+    run_dir_module.reserve_run_dir(run_dir)  # stands in for the live run
     with pytest.raises(ConfigError, match="in progress"):
         _run_smoke(repo_root, tmp_path, "in-flight")
     assert (run_dir / RUN_OWNER_MARKER).exists()
@@ -482,9 +484,9 @@ def test_claiming_a_directory_twice_loses_the_race(tmp_path: Path) -> None:
     # it. Exclusive creation of the ownership file decides.
     run_dir = tmp_path / "raced"
     run_dir.mkdir()
-    runner_module._claim_ownership(run_dir)
+    run_dir_module._claim_ownership(run_dir)
     with pytest.raises(ConfigError, match="in progress"):
-        runner_module._claim_ownership(run_dir)
+        run_dir_module._claim_ownership(run_dir)
 
 
 def test_an_interrupted_run_leaves_the_id_resumable(
@@ -526,9 +528,9 @@ def test_a_system_exit_also_releases_the_id(repo_root: Path, tmp_path: Path, mon
 def test_release_tolerates_a_directory_that_is_already_gone(tmp_path: Path) -> None:
     run_dir = tmp_path / "vanished"
     run_dir.mkdir()
-    runner_module._claim_ownership(run_dir)
+    run_dir_module._claim_ownership(run_dir)
     shutil.rmtree(run_dir)
-    runner_module._release_run_dir(run_dir)  # must not raise
+    run_dir_module.release_run_dir(run_dir)  # must not raise
 
 
 def test_claiming_a_directory_removed_mid_reservation_starts_fresh(
@@ -542,15 +544,15 @@ def test_claiming_a_directory_removed_mid_reservation_starts_fresh(
     """
     run_dir = tmp_path / "raced-away"
     run_dir.mkdir()
-    real_classify = runner_module._classify_existing_run_dir
+    real_classify = run_dir_module._classify_existing_run_dir
 
     def classify_then_vanish(path: Path) -> bool:
         result = real_classify(path)
         shutil.rmtree(path)  # the concurrent cleanup, at the worst moment
         return result
 
-    monkeypatch.setattr(runner_module, "_classify_existing_run_dir", classify_then_vanish)
-    resumed = runner_module._reserve_run_dir(run_dir)
+    monkeypatch.setattr(run_dir_module, "_classify_existing_run_dir", classify_then_vanish)
+    resumed = run_dir_module.reserve_run_dir(run_dir)
     # The directory it would have resumed no longer exists, so this is a
     # fresh run and must not claim to be resuming one.
     assert resumed is False
@@ -565,8 +567,94 @@ def test_a_failed_claim_does_not_leave_a_fresh_directory_behind(
     def refuse(run_dir: Path) -> bool:
         raise ConfigError("claim refused")
 
-    monkeypatch.setattr(runner_module, "_claim_ownership", refuse)
+    monkeypatch.setattr(run_dir_module, "_claim_ownership", refuse)
     run_dir = tmp_path / "never-claimed"
     with pytest.raises(ConfigError, match="claim refused"):
-        runner_module._reserve_run_dir(run_dir)
+        run_dir_module.reserve_run_dir(run_dir)
     assert not run_dir.exists()
+
+
+def test_a_run_completed_while_the_claim_retried_is_refused_not_overwritten(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The hole a tolerant recreate opens.
+
+    The directory vanishes between classification and the claim, and another
+    process recreates and *completes* the same id before the retry. Since
+    completing releases ownership, a retry that recreated the directory
+    tolerantly would find no owner, claim it, and overwrite a finished run.
+    """
+    run_dir = tmp_path / "completed-underneath"
+    run_dir.mkdir()
+    real_classify = run_dir_module._classify_existing_run_dir
+    interfered = False
+
+    def classify_then_complete_elsewhere(path: Path) -> bool:
+        nonlocal interfered
+        result = real_classify(path)
+        if not interfered:
+            interfered = True
+            shutil.rmtree(path)
+            path.mkdir()
+            for name in RUN_ARTIFACTS:
+                (path / name).write_text("someone else's results", encoding="utf-8")
+            (path / RUN_COMPLETE_MARKER).write_text("", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(
+        run_dir_module, "_classify_existing_run_dir", classify_then_complete_elsewhere
+    )
+    with pytest.raises(ConfigError, match="already exists and is complete"):
+        run_dir_module.reserve_run_dir(run_dir)
+    assert (run_dir / "results.jsonl").read_text(encoding="utf-8") == "someone else's results"
+    assert not (run_dir / RUN_OWNER_MARKER).exists()
+
+
+def test_a_directory_that_keeps_vanishing_is_refused_rather_than_looping(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    attempts = 0
+
+    def always_vanishes(run_dir: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise FileNotFoundError(run_dir)
+
+    monkeypatch.setattr(run_dir_module, "_claim_ownership", always_vanishes)
+    with pytest.raises(ConfigError, match="kept disappearing"):
+        run_dir_module.reserve_run_dir(tmp_path / "flapping")
+    assert attempts == RESERVE_ATTEMPTS
+
+
+def test_a_run_completed_before_the_retry_is_refused_not_claimed(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """The retry itself must re-classify, not recreate tolerantly.
+
+    The directory vanishes under the claim and another process recreates and
+    completes the same id before the retry runs. A retry that created the
+    directory with exist-ok would find no ownership file — completing
+    releases it — and claim a finished run.
+    """
+    run_dir = tmp_path / "finished-before-retry"
+    real_claim = run_dir_module._claim_ownership
+    first = True
+
+    def vanish_then_complete_elsewhere(path: Path) -> None:
+        nonlocal first
+        if not first:
+            real_claim(path)
+            return
+        first = False
+        shutil.rmtree(path)
+        path.mkdir()
+        for name in RUN_ARTIFACTS:
+            (path / name).write_text("someone else's results", encoding="utf-8")
+        (path / RUN_COMPLETE_MARKER).write_text("", encoding="utf-8")
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(run_dir_module, "_claim_ownership", vanish_then_complete_elsewhere)
+    with pytest.raises(ConfigError, match="already exists and is complete"):
+        run_dir_module.reserve_run_dir(run_dir)
+    assert (run_dir / "results.jsonl").read_text(encoding="utf-8") == "someone else's results"
+    assert not (run_dir / RUN_OWNER_MARKER).exists()
