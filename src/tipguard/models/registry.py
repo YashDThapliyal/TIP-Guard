@@ -49,12 +49,19 @@ def _cache_namespace(spec: ModelSpec, provider: ModelProvider) -> str:
     it, editing a mock's script leaves every previously cached reply in place
     and the old behaviour is replayed indefinitely.
     """
-    identity = {
+    identity: dict[str, object] = {
         "base_url": spec.base_url,
         "temperature": spec.temperature,
         "max_tokens": spec.max_tokens,
-        "script": getattr(provider, "script_fingerprint", ""),
     }
+    # Added only when there is a script, so a real provider's namespace stays
+    # byte-for-byte what it was. Adding the key unconditionally -- even as an
+    # empty string -- changes the serialised namespace for every provider and
+    # silently orphans every cached response, including the ones from paid
+    # APIs that the cache exists to avoid buying twice.
+    fingerprint = getattr(provider, "script_fingerprint", "")
+    if fingerprint:
+        identity["script"] = fingerprint
     return json.dumps(identity, sort_keys=True)
 
 

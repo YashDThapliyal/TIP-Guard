@@ -164,3 +164,41 @@ def test_a_mocks_fingerprint_changes_with_its_script() -> None:
     assert plain.script_fingerprint != other.script_fingerprint
     assert plain.script_fingerprint != ruled.script_fingerprint
     assert plain.script_fingerprint == MockProvider(default="a").script_fingerprint
+
+
+@pytest.mark.parametrize("alias", ["gpt-4o-mini", "claude-haiku-4-5", "ollama-qwen2.5-7b"])
+def test_a_real_providers_cache_namespace_is_unaffected_by_the_mock_script_key(
+    alias: str,
+) -> None:
+    # The script fingerprint exists for mocks, whose answers live in code.
+    # Adding its key unconditionally -- even as an empty string -- changes the
+    # serialised namespace for every provider and orphans every cached
+    # response, including the paid-API ones the cache exists to avoid buying
+    # twice. The key must be absent when there is no script.
+    import json
+
+    from tipguard.config.loader import load_yaml_model
+    from tipguard.config.schemas import ModelsConfig
+    from tipguard.models.registry import _cache_namespace, build_provider
+
+    models = load_yaml_model(Path("configs/models.yaml"), ModelsConfig)
+    spec = models.models[alias]
+    expected = json.dumps(
+        {
+            "base_url": spec.base_url,
+            "temperature": spec.temperature,
+            "max_tokens": spec.max_tokens,
+        },
+        sort_keys=True,
+    )
+    assert _cache_namespace(spec, build_provider(spec)) == expected
+
+
+def test_a_mocks_namespace_does_carry_its_script() -> None:
+    from tipguard.config.loader import load_yaml_model
+    from tipguard.config.schemas import ModelsConfig
+    from tipguard.models.registry import _cache_namespace, build_provider
+
+    models = load_yaml_model(Path("configs/models.yaml"), ModelsConfig)
+    spec = models.models["mock-judge"]
+    assert '"script"' in _cache_namespace(spec, build_provider(spec))
