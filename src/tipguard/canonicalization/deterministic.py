@@ -54,13 +54,13 @@ from collections.abc import Callable
 from tipguard.benchmark.transformations.base import Encoded, Family
 from tipguard.benchmark.transformations.base64_t import Base64Transformation
 from tipguard.benchmark.transformations.caesar import CaesarTransformation
-from tipguard.benchmark.transformations.code_snippet import decode_snippet
 from tipguard.benchmark.transformations.morse import MorseTransformation
 from tipguard.benchmark.transformations.reverse import ReverseTransformation
 from tipguard.benchmark.transformations.substitution import (
     SUBSTITUTION_MAPS,
     decode_without_params,
 )
+from tipguard.canonicalization.code_analysis import RestrictedCodeAnalyzer
 from tipguard.canonicalization.detector import (
     CONFIDENT_HIT_THRESHOLD,
     LOW_HIT_THRESHOLD,
@@ -192,13 +192,22 @@ def _decode_substitution_text(text: str) -> str | None:
 
 
 def _decode_code_text(text: str) -> str | None:
+    """Reconstruct the string a snippet builds, via the restricted analyzer.
+
+    `RestrictedCodeAnalyzer` rather than the benchmark's `decode_snippet`:
+    that function recognises the three shapes its own generator emits, which
+    is all a benchmark needs, while a defence does not get to assume the
+    attacker used the generator. The analyzer evaluates the whitelisted
+    subset instead, so a snippet that builds a string in some other supported
+    way is still recovered -- and one outside the subset is refused with a
+    reason rather than silently returning nothing.
+
+    Neither path executes anything: see `canonicalization.code_analysis`.
+    """
     payload = _extract_code(text)
     if payload is None:
         return None
-    try:
-        return decode_snippet(payload)
-    except ValueError:
-        return None
+    return RestrictedCodeAnalyzer().analyze(payload).result
 
 
 #: One decoder per family this canonicalizer can invert directly: every

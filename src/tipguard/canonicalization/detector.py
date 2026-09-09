@@ -652,6 +652,9 @@ def _is_prose_marker(token: str, alphabet: str) -> bool:
 #: nothing is stripped for that family.
 BASE64_ALPHABET = string.ascii_letters + string.digits + "+/="
 MORSE_ALPHABET = ".-/ "
+#: Python has no full stop outside a float or an attribute, and a snippet
+#: this analyzer accepts has neither, so a token carrying one is a label.
+PYTHON_ALPHABET = string.ascii_letters + string.digits + "_=\"'[](),+ "
 
 
 def _strip_prose_marker(span: str, alphabet: str = "") -> str:
@@ -844,7 +847,12 @@ def _extract_code(text: str) -> str | None:
     module docstring of `tipguard.benchmark.transformations.code_snippet`,
     whose `decode_snippet` this detector's positive verdict routes to.
     """
-    for candidate in _code_candidates(text):
+    for raw in _code_candidates(text):
+        # A wrapper's own label sits outside Python's syntax, so it is
+        # provably not part of the snippet -- the same alphabet argument the
+        # marker rule rests on. Without this, thirteen difficulty-4 cases
+        # failed to parse at all because the block opened with "P.S.".
+        candidate = _strip_prose_marker(raw, PYTHON_ALPHABET)
         if len(candidate) > MAX_SOURCE_LENGTH or not PYTHON_STRING_BUILDER.search(candidate):
             continue
         try:
