@@ -20,7 +20,7 @@ from tipguard.config.schemas import ExperimentConfig, ModelsConfig, PoliciesConf
 from tipguard.evaluation.case import _answer_correct, evaluate_case
 from tipguard.evaluation.summary import CaseRecord, RunSummary, summarize
 from tipguard.guardrail.factory import build_guardrail
-from tipguard.logging import configure_logging, get_logger
+from tipguard.logging import get_logger, redacting
 from tipguard.models.cache import ResponseCache
 from tipguard.models.registry import ProviderRegistry
 from tipguard.run_id import config_hash, make_run_id
@@ -169,18 +169,48 @@ def _build_manifest(
     }
 
 
+def _policy_values(policies: PoliciesConfig) -> tuple[str, ...]:
+    return tuple(value for policy in policies.policies for value in policy.protected_values)
+
+
 def run_experiment(
     config: ExperimentConfig,
     config_path: Path,
     run_id: str | None = None,
     now: datetime | None = None,
+    protected_values: Sequence[str] | None = None,
 ) -> RunArtifacts:
+    """Run `config` end to end and return its artifacts.
+
+    This does **not** configure logging. Handlers, level and propagation are
+    process-wide state, and a library facade such as `ProtectedModel` calls
+    this on behalf of an application that has already made those choices;
+    the CLI owns `configure_logging` instead. What the runner still owes its
+    caller is that its own records carry no protected value, so it scopes a
+    redacting filter to its logger for the duration of the run. Pass
+    `protected_values` to redact against something other than the policies
+    file `config` names — by default that file's values are used, so a
+    caller that does nothing still gets redaction.
+    """
     now = now or datetime.now(UTC)
     seed_everything(config.seed)
     policies = load_yaml_model(config.policies_config, PoliciesConfig)
     models = load_yaml_model(config.models_config, ModelsConfig)
     _ensure_model_alias(config, models)
-    configure_logging(protected_values=[v for p in policies.policies for v in p.protected_values])
+    protected = _policy_values(policies) if protected_values is None else tuple(protected_values)
+    with redacting(log, protected):
+        return _run_evaluated(config, config_path, models, policies, run_id, now)
+
+
+def _run_evaluated(
+    config: ExperimentConfig,
+    config_path: Path,
+    models: ModelsConfig,
+    policies: PoliciesConfig,
+    run_id: str | None,
+    now: datetime,
+) -> RunArtifacts:
+    """Reserve the run directory, evaluate, and persist — the body of a run."""
     cases = load_cases(config.dataset)
     _ensure_dataset_valid(cases, policies, config.dataset)
     cases = cases[: config.limit]

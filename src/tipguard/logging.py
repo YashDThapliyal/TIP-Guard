@@ -4,8 +4,13 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import cast
+
+#: The two shapes `logging` allows for `LogRecord.args`.
+_LogArgs = tuple[object, ...] | Mapping[str, object]
 
 _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message"}
 
@@ -55,6 +60,51 @@ class _JsonFormatter(logging.Formatter):
         # unchanged, so anything json cannot encode natively reaches
         # `default` still bearing its raw repr — redact it there too.
         return json.dumps(payload, default=lambda o: redact(str(o), self._protected))
+
+
+class _RedactingFilter(logging.Filter):
+    """Strips protected values from a record before any handler sees it.
+
+    `configure_logging` installs a redacting *formatter*, which protects only
+    a process that called it — and calling it is a process-wide act that a
+    library has no business performing on its caller's behalf. A logger's
+    filters, by contrast, run before its own handlers and before the record
+    propagates to any ancestor, so attaching this makes redaction a property
+    of the record itself: an embedding application's handlers see the
+    redacted form whether or not it ever configured TIP-Guard's logging.
+    """
+
+    def __init__(self, protected_values: Sequence[str]) -> None:
+        super().__init__()
+        self._protected = tuple(protected_values)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _redact_value(record.msg, self._protected)
+        if record.args:
+            record.args = cast(_LogArgs, _redact_value(record.args, self._protected))
+        for key, value in list(record.__dict__.items()):
+            if key not in _STANDARD_ATTRS:
+                setattr(record, key, _redact_value(value, self._protected))
+        return True
+
+
+@contextmanager
+def redacting(logger: logging.Logger, protected_values: Iterable[str]) -> Iterator[None]:
+    """Redact `protected_values` from everything `logger` emits in the block.
+
+    Scoped to one logger and undone on the way out, so unlike
+    `configure_logging` it leaves no process-wide state behind.
+    """
+    values = tuple(value for value in protected_values if value)
+    if not values:
+        yield
+        return
+    log_filter = _RedactingFilter(values)
+    logger.addFilter(log_filter)
+    try:
+        yield
+    finally:
+        logger.removeFilter(log_filter)
 
 
 def configure_logging(level: str = "INFO", protected_values: Iterable[str] = ()) -> None:

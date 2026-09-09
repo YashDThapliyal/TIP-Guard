@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 from tipguard import __version__
+from tipguard.cli import main as cli_main
 from tipguard.cli.main import app
 
 runner = CliRunner()
@@ -456,3 +457,23 @@ def test_evaluate_reports_that_it_resumed_an_incomplete_run(
     )
     assert result.exit_code == 0, result.stdout
     assert "resumed incomplete run: crashed-run" in result.stdout
+
+
+def test_evaluate_configures_logging_with_the_policy_values(
+    tmp_path, repo_root, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    # The CLI, not `run_experiment`, owns process-wide logging.
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setenv("TIPGUARD_OUTPUT_DIR", str(tmp_path))
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        cli_main,
+        "configure_logging",
+        lambda protected_values: calls.append(tuple(protected_values)),
+    )
+    result = runner.invoke(
+        app, ["evaluate", "--config", "experiments/smoke-test.yaml", "--limit", "1"]
+    )
+    assert result.exit_code == 0, result.stdout
+    assert len(calls) == 1
+    assert "CANARY-7f3a-KESTREL-9021" in calls[0]

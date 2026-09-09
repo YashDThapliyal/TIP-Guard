@@ -3,7 +3,7 @@
 import json
 import logging
 
-from tipguard.logging import configure_logging, get_logger, redact
+from tipguard.logging import configure_logging, get_logger, redact, redacting
 
 
 def test_redact_replaces_all_occurrences_case_insensitively() -> None:
@@ -81,3 +81,33 @@ def test_logger_redacts_values_serialized_by_the_json_default_hook(capsys) -> No
     assert record["path"] == "/tmp/[REDACTED]/report.json"
     assert record["obj"] == "opaque([REDACTED])"
     logging.getLogger("tipguard").handlers.clear()
+
+
+def test_redacting_scopes_a_filter_to_one_logger() -> None:
+    log = logging.getLogger("tipguard.scoped-test")
+    with redacting(log, ["SECRET-1"]):
+        assert len(log.filters) == 1
+    assert log.filters == []
+
+
+def test_redacting_with_no_values_adds_no_filter() -> None:
+    log = logging.getLogger("tipguard.scoped-empty")
+    with redacting(log, []):
+        assert log.filters == []
+
+
+def test_redacting_hides_values_from_message_args_and_extras() -> None:
+    log = logging.getLogger("tipguard.scoped-capture")
+    log.setLevel(logging.INFO)
+    captured: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = captured.append  # type: ignore[method-assign]
+    log.addHandler(handler)
+    try:
+        with redacting(log, ["SECRET-1"]):
+            log.info("saw SECRET-1 in %s", "a SECRET-1 body", extra={"note": "SECRET-1 here"})
+    finally:
+        log.removeHandler(handler)
+    record = captured[0]
+    assert "SECRET-1" not in record.getMessage()
+    assert record.note == "[REDACTED] here"  # type: ignore[attr-defined]

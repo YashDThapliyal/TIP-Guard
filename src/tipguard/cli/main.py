@@ -22,7 +22,7 @@ from tipguard.benchmark.validate import ValidationIssue, validate_cases
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import ExperimentConfig, PoliciesConfig
 from tipguard.evaluation.runner import run_experiment
-from tipguard.logging import redact
+from tipguard.logging import configure_logging, redact
 from tipguard.models.types import ProviderError
 
 app = typer.Typer(help="TIP-Guard command-line interface.", no_args_is_help=True)
@@ -113,13 +113,17 @@ def evaluate(
     ] = None,
 ) -> None:
     """Run an experiment configuration and write results under the output directory."""
+    # The CLI owns process-wide logging; `run_experiment` deliberately does
+    # not touch it, so that a library caller keeps its own configuration.
+    protected = _experiment_protected_values(config)
+    configure_logging(protected_values=protected)
     try:
         experiment = load_yaml_model(config, ExperimentConfig)
         if limit is not None:
             experiment = experiment.model_copy(update={"limit": limit})
-        artifacts = run_experiment(experiment, config, run_id=run_id)
+        artifacts = run_experiment(experiment, config, run_id=run_id, protected_values=protected)
     except (ConfigError, DatasetError, ProviderError) as exc:
-        _echo(str(exc), _experiment_protected_values(config))
+        _echo(str(exc), protected)
         raise typer.Exit(code=1) from exc
     if artifacts.resumed:
         typer.echo(f"resumed incomplete run: {artifacts.run_id}")

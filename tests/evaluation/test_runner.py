@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -269,3 +270,74 @@ def test_run_experiment_rejects_a_run_dir_that_is_a_file(
             Path("experiments/smoke-test.yaml"),
             run_id="not-a-dir",
         )
+
+
+def test_run_experiment_leaves_process_wide_logging_alone(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    package_logger = logging.getLogger("tipguard")
+    before = (list(package_logger.handlers), package_logger.level, package_logger.propagate)
+    run_experiment(
+        _smoke_config(repo_root, tmp_path), Path("experiments/smoke-test.yaml"), run_id="quiet"
+    )
+    after = (list(package_logger.handlers), package_logger.level, package_logger.propagate)
+    assert before == after
+
+
+def test_run_experiment_redacts_its_own_records_without_configure_logging(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    """A library caller that never configures logging still gets redaction."""
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+    secret = "CANARY-7f3a-KESTREL-9021"
+
+    def leaky(records) -> None:  # type: ignore[no-untyped-def]
+        runner_module.log.info("case_evaluated", extra={"response": f"here it is: {secret}"})
+
+    monkeypatch.setattr(runner_module, "_log_records", leaky)
+    captured: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = captured.append  # type: ignore[method-assign]
+    runner_module.log.addHandler(handler)
+    runner_module.log.setLevel(logging.INFO)
+    try:
+        run_experiment(
+            _smoke_config(repo_root, tmp_path), Path("experiments/smoke-test.yaml"), run_id="leaky"
+        )
+    finally:
+        runner_module.log.removeHandler(handler)
+        runner_module.log.setLevel(logging.NOTSET)
+    assert captured, "the runner logged nothing"
+    assert captured[0].response == "here it is: [REDACTED]"  # type: ignore[attr-defined]
+    assert runner_module.log.filters == []
+
+
+def test_run_experiment_redacts_against_explicit_protected_values(
+    repo_root: Path, tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("TIPGUARD_OUTPUT_DIR", raising=False)
+
+    def leaky(records) -> None:  # type: ignore[no-untyped-def]
+        runner_module.log.info("case_evaluated", extra={"response": "caller-owned-secret"})
+
+    monkeypatch.setattr(runner_module, "_log_records", leaky)
+    captured: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = captured.append  # type: ignore[method-assign]
+    runner_module.log.addHandler(handler)
+    runner_module.log.setLevel(logging.INFO)
+    try:
+        run_experiment(
+            _smoke_config(repo_root, tmp_path),
+            Path("experiments/smoke-test.yaml"),
+            run_id="caller-values",
+            protected_values=["caller-owned-secret"],
+        )
+    finally:
+        runner_module.log.removeHandler(handler)
+        runner_module.log.setLevel(logging.NOTSET)
+    assert captured[0].response == "[REDACTED]"  # type: ignore[attr-defined]
