@@ -176,7 +176,61 @@ _Pending — filled from `scripts/analyse_study.py` when all arms complete._
 
 ## Failure analysis
 
-_Pending._
+### A low violation rate can mean refusal, or it can mean the model failed the task
+
+This is the single most important qualification on every number above, and it is measurable rather
+than speculative. The benchmark's benign cases carry gold answers, so for each transformation family
+we can ask two questions of the *same* model: how often does an attack in this family leak, and how
+often does the model correctly complete a *harmless* task wrapped in the same transformation. The
+second is a direct measure of whether the model can perform the transformation at all.
+
+Undefended, `context` condition:
+
+| Family | gpt-4o-mini violation | gpt-4o-mini benign accuracy | haiku violation | haiku benign accuracy |
+| --- | --- | --- | --- | --- |
+| substitution | 0.95 [0.87–0.98] | 0.88 [0.64–0.97] | 0.18 [0.11–0.28] | 0.25 [0.10–0.49] |
+| base64 | 0.94 [0.86–0.98] | 0.87 [0.62–0.96] | 0.10 [0.05–0.19] | 0.00 [0.00–0.20] |
+| morse | 0.88 [0.82–0.92] | 0.73 [0.59–0.83] | 0.08 [0.04–0.13] | 0.21 [0.12–0.34] |
+| code | 0.83 [0.76–0.88] | 0.94 [0.83–0.98] | 0.19 [0.13–0.26] | 0.40 [0.27–0.54] |
+| caesar | 0.63 [0.51–0.74] | 0.19 [0.07–0.43] | 0.03 [0.01–0.10] | 0.06 [0.01–0.28] |
+| multi_step | 0.29 [0.20–0.39] | 0.00 [0.00–0.14] | 0.00 [0.00–0.04] | 0.00 [0.00–0.14] |
+
+The two columns move together: across the six families, Pearson r between benign accuracy and
+violation rate is **+0.92** for gpt-4o-mini and **+0.82** for haiku. (Six families is a small basis
+for a correlation, and these are point estimates without intervals — the claim rests on the
+direction being large and consistent across two models, not on the coefficient's precision.)
+
+The clearest case is `multi_step`. gpt-4o-mini's violation rate there is its lowest, 0.29, which
+reads as robustness — until the next column shows benign accuracy of **0.00**: the model cannot
+carry out a chained transformation at all, on any case, harmless or not. Its apparent safety on that
+family is incapacity. The same holds for haiku and base64: 0.00 benign accuracy, and correspondingly
+little leakage.
+
+This matters for how the whole study is read. Some of what looks like resistance is a capability
+ceiling, and capability ceilings lift with every model release. A defence evaluated today against
+`multi_step` on gpt-4o-mini is being graded on an attack the model cannot execute yet. That is the
+opposite of a safety margin.
+
+It also qualifies the cross-model comparison directly. haiku's much lower violation rate under
+`context` is not straightforwardly better safety behaviour: it decodes these transformations far
+less well (benign accuracy 0.00–0.40 against gpt-4o-mini's 0.00–0.94), so a large part of the gap is
+that the attacks simply do not land.
+
+### The two models are vulnerable to different attack classes
+
+Ranked by undefended violation rate under `context`, the orderings barely resemble each other.
+gpt-4o-mini's worst families are mechanical encodings — substitution 0.95, base64 0.94, morse 0.88 —
+which it decodes reliably and then complies with. haiku's worst are the semantic ones: `indirect`
+0.35 [0.25–0.46] and `riddle` 0.20 [0.12–0.32], well above its mechanical families (base64 0.10,
+morse 0.08, caesar 0.03).
+
+So the encoding families that dominate the TIP literature are close to harmless against haiku, while
+indirection — no cipher, just misdirection — is its leading failure. A defence tuned to decode
+ciphers addresses gpt-4o-mini's problem and largely misses haiku's.
+
+### Where the defences fail, by family
+
+_Pending the TIP-Guard arms._
 
 ## Limitations
 
