@@ -24,6 +24,7 @@ from pathlib import Path
 
 from tipguard.evaluation.metrics import Rate, separates, wilson_rate
 from tipguard.evaluation.summary import CaseRecord
+from tipguard.guardrail.baselines import DEFAULT_THRESHOLD
 
 MARKERS = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("reports/study")
 
@@ -33,6 +34,16 @@ BENIGN = ("benign_transformation", "hard_negative")
 
 #: The split holding transformation families withheld from every other split.
 HELDOUT_FAMILIES = "heldout_transformation"
+
+#: Thresholds the sweep reports. `DEFAULT_THRESHOLD` is imported rather than
+#: written as a literal and is always included, because it is the point every
+#: arm actually ran at -- a sweep that skipped it could not be checked against
+#: the arms, and an earlier version did skip it: it swept 0.55 and called that
+#: "shipped" while the arms ran at 0.50. Those two agree only because nothing
+#: in this corpus scores between them, which is luck rather than design.
+SWEEP_THRESHOLDS = tuple(
+    sorted({0.25, 0.35, 0.45, DEFAULT_THRESHOLD, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0})
+)
 
 
 def load(arm: str) -> list[CaseRecord]:
@@ -181,11 +192,11 @@ def threshold_sweep() -> None:
             ("Threshold", "Attacks blocked", "False positives"),
             [
                 (
-                    f"{t:.2f}",
+                    f"{t:.2f}" + (" (as run)" if t == DEFAULT_THRESHOLD else ""),
                     wilson_rate(blocked(attacks, t)).format(),
                     wilson_rate(blocked(benign, t)).format(),
                 )
-                for t in (0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0)
+                for t in SWEEP_THRESHOLDS
             ],
         )
 

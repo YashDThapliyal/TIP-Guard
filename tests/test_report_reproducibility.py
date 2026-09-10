@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tipguard.guardrail.baselines import DEFAULT_THRESHOLD
+
 REPORT = Path("docs/report.md")
 MARKERS = Path("artifacts/study-v1/markers")
 SCRIPTS = (Path("scripts/analyse_study.py"), Path("scripts/report_tables.py"))
@@ -105,22 +107,32 @@ def test_both_scripts_are_referenced_by_the_artifact_readme() -> None:
         assert script.name in text, f"{script.name} is not documented for a reader"
 
 
-def test_the_sweep_at_the_shipped_threshold_matches_the_arm_it_swept(generated: str) -> None:
+def test_the_sweep_at_the_threshold_as_run_matches_the_arm_it_swept(generated: str) -> None:
     """The sweep and the arm must agree where they describe the same thing.
 
-    Every arm ran at 0.55, so the sweep's 0.55 row is the same measurement as
-    that arm's reported detection rate -- same cases, same threshold. If they
-    disagree, the sweep is computing something other than what it claims.
+    No study config sets `input_threshold`, so every arm ran at
+    `DEFAULT_THRESHOLD`. The sweep's row for that threshold is therefore the
+    same measurement as that arm's reported detection rate -- same cases, same
+    threshold -- and they must agree exactly, denominator included.
 
-    This is the invariant that catches mishandled parser failures. The first
-    version of the sweep dropped them, because they carry no numeric score;
-    but `ThresholdGuard` is fail-closed there and blocks them at every
-    threshold, so dropping them understated detection and quoted a denominator
-    (743) smaller than every other table in the report (752). Rounding hid the
-    rate difference at 0.55 -- only the denominator gave it away.
+    Two bugs made this test necessary, and the threshold is read from the code
+    rather than written here because the second was a wrong literal:
+
+    - The sweep first dropped parser failures, which carry no numeric score.
+      `ThresholdGuard` is fail-closed there and blocks them at every
+      threshold, so dropping them understated detection and quoted a
+      denominator of 743 against the 752 every other table uses. Rounding hid
+      the rate difference; only the denominator gave it away.
+    - This test then asserted the arms ran at 0.55 when they run at 0.50, and
+      the sweep did not even evaluate 0.50. It passed only because no case in
+      this corpus scores between the two -- luck, not design.
     """
-    sweep = [line for line in generated.splitlines() if line.startswith("| 0.55 ")]
-    assert sweep, "no 0.55 row in the sweep output"
+    marker = f"| {DEFAULT_THRESHOLD:.2f} "
+    sweep = [line for line in generated.splitlines() if line.startswith(marker)]
+    assert sweep, (
+        f"the sweep has no row for {DEFAULT_THRESHOLD}, the threshold the arms actually "
+        "ran at, so it cannot be checked against them"
+    )
     swept_detection = sweep[0].split("|")[2].strip()
 
     arm = [line for line in generated.splitlines() if "| input_classifier_v2 |" in line]
@@ -129,6 +141,6 @@ def test_the_sweep_at_the_shipped_threshold_matches_the_arm_it_swept(generated: 
     arm_detection = arm[0].split("|")[3].strip()
 
     assert swept_detection == arm_detection, (
-        f"sweep at the shipped threshold says {swept_detection} while the arm reports "
+        f"sweep at {DEFAULT_THRESHOLD} says {swept_detection} while the arm reports "
         f"{arm_detection}; the sweep is not measuring the same quantity"
     )

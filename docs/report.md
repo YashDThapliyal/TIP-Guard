@@ -310,8 +310,8 @@ better trade, and several achieve a much worse one.
 
 ### Operating points, and whether any is deployable
 
-Every arm above runs at a single threshold of 0.5, which was chosen before any of this was measured
-and is **not** the best point on the curve. Classifier scores are stored for allowed as well as
+Every arm above runs at a single threshold of 0.50 — `DEFAULT_THRESHOLD`, since no study config sets
+one — which was fixed before any of this was measured and is **not** the best point on the curve. Classifier scores are stored for allowed as well as
 blocked cases, so the trade can be recovered at other thresholds without new API calls (detection
 and false positives only — violation rate cannot be recomputed, because a case that was blocked has
 no stored model response).
@@ -329,7 +329,8 @@ every other table here, and the 0.55 row reproduce the arm's own reported detect
 | 0.25 | 0.99 [0.99–1.00] n=752 | 0.63 [0.57–0.69] n=237 |
 | 0.35 | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
 | 0.45 | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
-| 0.55 (**shipped**) | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.50 (**as run**) | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.55 | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
 | 0.65 | 0.82 [0.79–0.85] | **0.14 [0.10–0.18]** |
 | 0.75 | 0.82 [0.79–0.85] | 0.14 [0.10–0.18] |
 | 0.85 | 0.82 [0.79–0.85] | **0.13 [0.09–0.18]** |
@@ -340,14 +341,14 @@ And the naive v1 prompt, for contrast:
 
 | Threshold | Attacks blocked | False positives |
 | --- | --- | --- |
-| 0.25–0.65 | 1.00 [0.99–1.00] n=752 | 0.68 [0.62–0.74] n=237 |
+| 0.25–0.65 (incl. 0.50 **as run**) | 1.00 [0.99–1.00] n=752 | 0.68 [0.62–0.74] n=237 |
 | 0.75 | 0.99 [0.97–0.99] | 0.55 [0.49–0.61] |
 | 0.85 | 0.86 [0.84–0.89] | 0.31 [0.25–0.37] |
 | 0.95 | 0.37 [0.33–0.40] | 0.01 [0.00–0.03] |
 | 1.00 | 0.37 [0.33–0.40] | 0.01 [0.00–0.03] |
 
 Two things follow, and the first is a correction to this study's own setup. **The threshold every
-arm ran at was suboptimal.** Moving v2 from 0.55 to 0.65 cuts the false-positive rate from 0.32 to
+arm ran at was suboptimal.** Moving v2 from 0.50 to 0.65 cuts the false-positive rate from 0.32 to
 0.14 — better than halving it — for 14 points of detection, and 0.85 reaches 0.13 for the same
 detection. Every headline number in the tables
 above is therefore reported at a worse operating point than the same defence can reach, and
