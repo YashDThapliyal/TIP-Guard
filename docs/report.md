@@ -46,10 +46,11 @@ Five findings, in descending order of how much they should change what a practit
 filtering. Against an ablation that differs in canonicalization alone, it changed nothing measurable
 — violations, attacks blocked, false positives and benign accuracy all overlap, in both conditions —
 and the full pipeline cost 2.6× the best conventional arm for no separable gain. The reason is a
-ceiling: once the risk prompt is calibrated, the classifier already blocks 1.00 [0.99–1.00] of
-attacks reading raw text, so a decoding stage has nothing left to recover. A capable LLM classifier
-appears to canonicalize implicitly, and paying for it twice buys nothing. See
-[Canonicalization](#canonicalization) for where a benefit could still exist.
+ceiling: a calibrated classifier, a second pass and an output guard already block 751 of 752 attacks
+between them, leaving a decoding stage nothing to recover. Canonicalization does change one thing no
+headline rate captures — without it, 21 attacks are stopped only *after* the model has answered,
+whereas with it the output guard never fires. See [Canonicalization](#canonicalization) for the
+stage-by-stage attribution and for where a benefit could still exist.
 
 ## Question
 
@@ -309,9 +310,31 @@ Nor does the full pipeline beat the best conventional arm. `tip_guard` and
 0.35 [0.29–0.41]) or on violations (both 0.00), while costing **$0.41 against $0.16** — 2.6× for no
 measurable difference.
 
-**Why: the detection ceiling was already reached without canonicalization.** Once the risk prompt is
-calibrated, the classifier blocks 1.00 [0.99–1.00] of attacks reading the raw prompt text. There is
-no headroom for a decoding stage to recover. Per family, in the `context` condition:
+**Why: the detection ceiling was already reached without canonicalization.** Not, however, by a
+single classifier reading raw text — that is `input_classifier_v2`, which blocks 0.96 [0.94–0.97].
+The 1.00 belongs to the *pipeline*, and attributing it to the raw-text classifier alone would
+overstate what one classifier pass does. Both TIP-Guard arms run two classifier stages and an output
+guard, and counting which stage first blocked each attack shows the work is genuinely divided:
+
+| Blocking stage (`context`, attacks only) | `tip_guard` | `tip_guard_no_canon` |
+| --- | --- | --- |
+| `original_classifier` (raw prompt) | 640 (85.1%) | 698 (92.8%) |
+| `canonical_classifier` (canonicalized, or raw when ablated) | 111 (14.8%) | 32 (4.3%) |
+| `output_guard` (after the model answered) | 0 | 21 (2.8%) |
+| **Total blocked** | **751 / 752** | **751 / 752** |
+
+So the ablated pipeline reaches the same 751/752, but it gets there differently, and the difference
+is the one thing canonicalization demonstrably changes: **without it, 21 attacks (2.8%) are caught
+only after the main model has already produced a response.** With canonicalization, the output guard
+never fires — every attack is stopped before the model answers.
+
+That is not visible in any of the four headline rates, because the output guard caught all 21 and
+the violation rate stayed at 0.00 either way. It is still a real difference in defence depth: a
+pre-emptive block and a post-hoc catch fail differently when the catching stage is imperfect, and
+the ablated pipeline is relying on its last line for cases the earlier ones missed. A study
+measuring only block/allow outcomes cannot price that, and this one does not try to.
+
+Per family, in the `context` condition:
 
 | Family | pattern_detector | input_classifier_v2 | tip_guard_no_canon | tip_guard |
 | --- | --- | --- | --- | --- |
@@ -328,15 +351,20 @@ no headroom for a decoding stage to recover. Per family, in the `context` condit
 The interesting column is `pattern_detector`, which shows what a defence that reads *surface form*
 can do: it catches encodings with a signature (base64 0.90, morse 0.67) and is completely blind to
 the families with none (riddle 0.00, indirect 0.00, direct 0.00). That is the gap semantic
-canonicalization was designed to close. But a calibrated LLM classifier closes it too — reading the
-same raw text, it scores 1.00 on exactly those families — and the remaining margin from 0.88–1.00 up
-to 1.00 is captured by the ablated pipeline, which does no canonicalization at all.
+canonicalization was designed to close. A calibrated LLM classifier closes it too — reading the same
+raw text, `input_classifier_v2` scores 1.00 on exactly those three families — and the remaining
+margin, where that single classifier still drops cases (morse 0.88, caesar 0.94, code 0.94), is
+closed by the ablated pipeline's second classifier pass and output guard rather than by any
+decoding.
 
 **The honest reading.** This is not evidence that semantic canonicalization cannot work. It is
-evidence that it adds nothing *here*, in a regime where a capable LLM classifier already saturates
-detection — because that classifier is evidently performing the canonicalization implicitly, as part
-of judging the prompt. An explicit decoding stage then buys a second copy of a capability the system
-already has, and charges an extra model call per case for it.
+evidence that it changes no measured outcome *here*, in a regime where a calibrated classifier plus
+a second pass plus an output guard already saturate detection between them. The natural explanation
+is that the classifier sees through these transformations well enough on its own — it scores 1.00 on
+riddles, indirection and direct requests from raw text — but the stage attribution above stops short
+of proving that: what it shows is that the *pipeline* needs no decoding stage to reach 751/752, with
+its last 2.8% coming from the output guard. An explicit decoding stage then costs an extra model
+call per case and moves those cases earlier in the pipeline without changing who is blocked.
 
 That framing also says where a benefit could still appear, and none of it is tested here: a smaller
 or cheaper classifier that cannot decode on its own; transformations the classifier fails to see
