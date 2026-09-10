@@ -696,3 +696,83 @@ def test_overlapping_fragments_in_one_field_are_both_counted(
         f"fragments [0:{first_end}] and [{second_start}:] were not counted together"
     )
     assert result.errors == (CANONICALIZER_LEAK,)
+
+
+def test_the_leak_scan_stays_fast_on_a_hostile_reply() -> None:
+    """Cost is bounded, not merely small on the shipped policy file.
+
+    The scan tested `target[start:end] in haystack` for every end, restarting
+    the field search from the top each time -- a substring scan per character
+    of the value. A 2,000-character value against an 80KB field took 7.4
+    seconds, and a model's reply is attacker-influenced on both sides.
+    """
+    import time
+
+    from tipguard.canonicalization.llm_canonicalizer import (
+        CanonJudgement,
+        _leaks_across_fields,
+    )
+
+    value = "".join(chr(97 + (index % 26)) for index in range(400))
+    judgement = CanonJudgement(
+        contains_transformation=True,
+        transformation=None,
+        reconstructed_intent=value[:-1] * 40,
+        requested_action="y",
+        entities=[],
+        policy_categories=["none"],
+        confidence=0.5,
+        uncertainties=[],
+    )
+    started = time.monotonic()
+    assert _leaks_across_fields(judgement, (value,))
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_very_long_value_is_left_to_literal_redaction() -> None:
+    # Scanning a value costs time proportional to its own length on every
+    # reply. Past the bound the split-across-fields rule declines; `redact`
+    # still finds the value itself however it is spaced.
+    from tipguard.canonicalization.llm_canonicalizer import (
+        MAX_SCANNED_VALUE,
+        CanonJudgement,
+        _leaks_across_fields,
+    )
+
+    value = "".join(chr(97 + (index % 26)) for index in range(MAX_SCANNED_VALUE + 1))
+    half = len(value) // 2
+    judgement = CanonJudgement(
+        contains_transformation=True,
+        transformation=None,
+        reconstructed_intent=value[:half],
+        requested_action=value[half:],
+        entities=[],
+        policy_categories=["none"],
+        confidence=0.5,
+        uncertainties=[],
+    )
+    assert not _leaks_across_fields(judgement, (value,))
+
+
+def test_the_coverage_scan_alone_catches_overlapping_fragments() -> None:
+    # Asserted against the scan directly, not through `canonicalize`, so the
+    # test cannot pass because some other rule happened to fire first.
+    from tipguard.canonicalization.llm_canonicalizer import (
+        CanonJudgement,
+        _leaks_across_fields,
+    )
+
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    values = tuple(v for p in policies.policies for v in p.protected_values)
+    judgement = CanonJudgement(
+        contains_transformation=True,
+        transformation=None,
+        reconstructed_intent="x",
+        requested_action="y",
+        entities=[value[:14], value[8:]],
+        policy_categories=["none"],
+        confidence=0.5,
+        uncertainties=[],
+    )
+    assert _leaks_across_fields(judgement, values)

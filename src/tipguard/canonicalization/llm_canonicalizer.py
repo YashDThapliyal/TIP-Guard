@@ -258,6 +258,11 @@ def _free_text(judgement: CanonJudgement) -> list[str]:
 PARTIAL_DISCLOSURE_LENGTH = 8
 
 
+#: Longest protected value this rule will scan. Beyond it the per-reply cost
+#: grows with the value's own length for no gain: a secret that long is not
+#: one a model reproduces by halves.
+MAX_SCANNED_VALUE = 512
+
 #: Shortest fragment of a protected value that counts as part of it. Four
 #: characters is already short enough to occur in English by chance -- a
 #: value containing "secret" and "value" accumulated 55% coverage from a
@@ -354,6 +359,14 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
         target = squash(value)
         if len(target) < MIN_FRAGMENT:
             continue
+        if len(target) > MAX_SCANNED_VALUE:
+            # A value this long is not a secret a model could disclose by
+            # accident, and scanning it costs time proportional to its length
+            # on every reply. The literal redaction still covers it, and
+            # `redact` finds it however it is spaced; only the split-across-
+            # fields rule declines. The longest shipped value squashes to 38
+            # characters, so this is two orders of magnitude of headroom.
+            continue
         covered = bytearray(len(target))
         exempt = bytearray(len(target))
         for text in _free_text(judgement):
@@ -361,12 +374,32 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
             if not haystack:
                 continue
             start = 0
+            threshold = len(target) * MAX_VALUE_COVERAGE
             while start <= len(target) - MIN_FRAGMENT:
+                # Stop as soon as the answer cannot change. Coverage only
+                # grows, so once it is past the threshold the remaining
+                # positions are work whose result is already known -- which
+                # is most of the work on exactly the inputs that are slow.
+                if sum(covered) > threshold:
+                    break
+                # Located once, then extended. Testing `target[start:end] in
+                # haystack` for every end restarts the search from the top of
+                # the field each time, which is a substring scan per character
+                # of the value: a 2,000-character value against an 80KB field
+                # took 7.4 seconds. Finding the shortest run once and walking
+                # forward from there compares single characters instead.
+                position = haystack.find(target[start : start + MIN_FRAGMENT])
+                if position == -1:
+                    start += 1
+                    continue
                 end = start + MIN_FRAGMENT
-                # Extend each run as far as it still matches, so a long
-                # fragment marks off its whole length rather than a window.
-                while end <= len(target) and target[start:end] in haystack:
+                while (
+                    end < len(target)
+                    and position + (end - start) < len(haystack)
+                    and haystack[position + (end - start)] == target[end]
+                ):
                     end += 1
+                end += 1
                 # Only a run that cannot be extended leftwards is counted.
                 # A sub-run of a longer match -- "ystemcanary" inside
                 # "systemcanary" -- is not a whole word, so the vocabulary
