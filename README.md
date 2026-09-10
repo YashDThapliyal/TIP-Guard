@@ -223,12 +223,22 @@ tests/
 
 ## License
 
-[Apache-2.0](LICENSE). Chosen over MIT for the explicit patent grant, which
-matters for security tooling: anyone building on the canonicalization approach
-here is covered. The change-notice requirement also helps a benchmark, where a
-result depends on the exact corpus — a modified dataset must say it was
-modified.
+[Apache-2.0](LICENSE), covering the code and the synthetic benchmark alike.
 
-The synthetic benchmark is covered by the same licence. Every protected value
-in `configs/policies.yaml` is a fictional canary, published on purpose so the
-study's numbers can be checked; see [`docs/safety-protocol.md`](docs/safety-protocol.md).
+Chosen over MIT mainly for two clauses. Section 3 is an express patent grant
+from each contributor, so a contributor cannot later assert patents they hold
+over their own contribution against people using it — MIT is silent on
+patents, which leaves that open. It is worth being precise about what this does
+*not* do: the grant runs only from contributors, and only to claims necessarily
+infringed by what they contributed. It is not protection against third-party
+patent claims, and nothing in a licence could provide that. Section 4(b)
+requires modified files to carry a notice of change, which suits a benchmark
+whose results depend on the exact corpus.
+
+Every protected value in `configs/policies.yaml` is a fictional canary,
+committed deliberately so the study's numbers can be verified rather than
+trusted. None corresponds to a real credential, customer or system; see
+[`docs/safety-protocol.md`](docs/safety-protocol.md). That note lives here and
+in the safety protocol rather than in `NOTICE`, because Apache-2.0 §4(d)
+obliges every downstream redistribution to reproduce `NOTICE` verbatim, and
+project commentary does not belong in a file with that reach.
