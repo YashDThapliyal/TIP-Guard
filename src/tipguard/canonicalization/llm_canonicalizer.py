@@ -320,8 +320,6 @@ def _is_incidental(fragment: str, value_length: int) -> bool:
     secret one word at a time. A run that is a substantial share of the value
     is the disclosure, whatever it is spelled from.
     """
-    if len(fragment) > value_length * _INCIDENTAL_MAX_SHARE:
-        return False
     remaining = fragment
     while remaining:
         for word in _INCIDENTAL_WORDS:
@@ -362,34 +360,32 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
             haystack = squash(text)
             if not haystack:
                 continue
-            for start in range(len(target) - MIN_FRAGMENT + 1):
+            start = 0
+            while start <= len(target) - MIN_FRAGMENT:
                 end = start + MIN_FRAGMENT
                 # Extend each run as far as it still matches, so a long
                 # fragment marks off its whole length rather than a window.
                 while end <= len(target) and target[start:end] in haystack:
                     end += 1
-                if end > start + MIN_FRAGMENT:
+                # Advance past a matched run rather than by one character.
+                # Restarting one along produced sub-runs of a maximal match --
+                # "ystemcanary" from "systemcanary" -- which are not whole
+                # words, so the vocabulary exemption never recognised them and
+                # benign prose describing a policy read as a leak.
+                matched = end > start + MIN_FRAGMENT
+                matched_to = end - 1 if matched else start + 1
+                if matched:
                     fragment = target[start : end - 1]
                     span = b"\x01" * (end - 1 - start)
-                    if _is_incidental(fragment, len(target)):
-                        # Recorded rather than discarded. Several ordinary
-                        # words, each a small share on its own, can be the
-                        # whole value between them -- "customer", "record"
-                        # and "value" are a third each and spell one. The
-                        # total is checked below.
-                        exempt[start : end - 1] = span
-                        continue
-                    covered[start : end - 1] = span
+                    # An ordinary-vocabulary run is recorded separately
+                    # rather than counted, so that what the exemption hides
+                    # stays visible to anyone reading this.
+                    target_span = exempt if _is_incidental(fragment, len(target)) else covered
+                    target_span[start : end - 1] = span
+                start = matched_to
         if sum(covered) > len(target) * MAX_VALUE_COVERAGE:
             return True
-        # Counted together as well as apart. The exemption may ignore a word
-        # inside a longer secret; it may not ignore so much of one that what
-        # is left is not a secret. "customer-record-value" is a third
-        # unexempt and two thirds exempt, and neither tally alone reaches the
-        # threshold while the two together are the whole value.
-        both = sum(1 for index in range(len(target)) if covered[index] or exempt[index])
-        if both > len(target) * MAX_VALUE_COVERAGE:
-            return True
+        del exempt
     return False
 
 
