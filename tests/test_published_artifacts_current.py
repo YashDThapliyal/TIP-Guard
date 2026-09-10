@@ -244,45 +244,92 @@ def test_the_dataset_is_the_one_the_runs_measured() -> None:
     )
 
 
-#: Case counts the report is allowed to quote, each derived from a file rather
-#: than written here: the reportable population, the whole dataset, and the
-#: gold-review subset.
+#: Sample sizes the report quotes that no artifact can confirm: the two
+#: pilots, which ran before the study and were never written to a run
+#: directory. Listed explicitly so they are a stated exception rather than a
+#: gap in the pattern.
+PILOT_SAMPLE_SIZES = frozenset({20, 40})
+
+#: Every "N cases" or "N-case" claim. The lookbehind matters: without it,
+#: "leaks on 0.75 of prohibited cases" yields 75.
+#: Must start with a digit: `[\d,]+` alone matched a bare comma in the report.
+_COUNT_CLAIM = re.compile(r"(?<![\d.])(\d[\d,]*)(?:-case|\s+(?:[a-z_-]+\s+){0,2}cases?\b)")
+
+
 def _legitimate_case_counts() -> dict[int, str]:
+    """Counts the report may quote, each derived from a file.
+
+    An earlier version listed only three, and its pattern matched only
+    `cases` after an optional `held-out`/`generated`. So `752 prohibited
+    cases`, `26 direct cases` and the `752/237-case arm` -- all checkable
+    against the dataset -- were never examined, and could have gone stale
+    silently.
+    """
+    cases = load_cases(DATASET)
+    reportable = [case for case in cases if case.split.value in REPORTABLE_SPLITS]
+
+    def of_type(*types: str) -> int:
+        return sum(1 for case in reportable if case.case_type.value in types)
+
     counts = {
-        _reportable_case_count(): "reportable population",
-        len(load_cases(DATASET)): "whole dataset",
+        len(cases): "whole dataset",
+        len(reportable): "reportable population",
+        of_type("tip", "direct"): "prohibited cases",
+        of_type("benign_transformation", "hard_negative"): "benign and hard-negative cases",
+        of_type("benign_transformation"): "benign transformations",
+        of_type("direct"): "direct cases",
     }
     review = Path("data/labels/gold-review.jsonl")
     if review.exists():
-        counts[
-            len([ln for ln in review.read_text(encoding="utf-8").splitlines() if ln.strip()])
-        ] = "gold review"
+        reviewed = len([ln for ln in review.read_text(encoding="utf-8").splitlines() if ln.strip()])
+        counts[reviewed] = "gold review"
     return counts
 
 
 def test_every_case_count_in_the_report_is_current() -> None:
-    """Every "N cases" claim in the prose, not merely one of them.
+    """Every count claim in the prose, in every form it is written.
 
-    An earlier version asserted the expected count appeared *somewhere*. The
-    report says 989 in six separate sentences, so updating one and leaving
-    five stale would have passed. The tables regenerate; the prose does not.
+    An earlier version asserted the expected count appeared *somewhere*: the
+    report says 989 in six sentences, so updating one and leaving five stale
+    would have passed. The pattern was then still too narrow, examining 8 of
+    the 14 count claims actually present.
     """
     text = REPORT.read_text(encoding="utf-8")
     legitimate = _legitimate_case_counts()
-    quoted = {
-        int(match.replace(",", ""))
-        for match in re.findall(r"([\d,]+) (?:held-out |generated )?cases\b", text)
-    }
+    quoted = {int(match.replace(",", "")) for match in _COUNT_CLAIM.findall(text)}
     assert quoted, "found no case-count claims in the report; the pattern is probably wrong"
-    stale = sorted(n for n in quoted if n not in legitimate)
+    stale = sorted(n for n in quoted if n not in legitimate and n not in PILOT_SAMPLE_SIZES)
     assert not stale, (
-        f"the report quotes case counts that match nothing on disk: {stale}. "
-        f"Legitimate counts are {ceil_sorted(legitimate)}"
+        f"the report quotes case counts that match nothing on disk: {stale}. Legitimate counts "
+        f"are {', '.join(f'{n} ({what})' for n, what in sorted(legitimate.items()))}, plus the "
+        f"pilot sizes {sorted(PILOT_SAMPLE_SIZES)}"
     )
 
 
-def ceil_sorted(counts: dict[int, str]) -> str:
-    return ", ".join(f"{n} ({what})" for n, what in sorted(counts.items()))
+def test_the_count_pattern_sees_the_claims_that_are_there() -> None:
+    """Guards the pattern, not the counts.
+
+    A regex that quietly stops matching would make the test above pass by
+    finding nothing to check -- which is how the previous version passed while
+    ignoring six claims. These are forms the report actually uses.
+    """
+    for phrase, expected in (
+        ("989 held-out cases", 989),
+        ("989 cases", 989),
+        ("752 prohibited cases", 752),
+        ("26 direct cases", 26),
+        ("1,700 generated cases", 1700),
+        ("the 752/237-case arm", 237),
+        ("170-case gold subset", 170),
+        ("40-case-per-type pilot", 40),
+    ):
+        found = {int(m.replace(",", "")) for m in _COUNT_CLAIM.findall(phrase)}
+        assert expected in found, f"the pattern missed {expected} in {phrase!r} (found {found})"
+
+    # And must not read a rate as a count.
+    assert not _COUNT_CLAIM.findall("leaks on 0.75 of prohibited cases"), (
+        "the pattern read a decimal as a case count"
+    )
 
 
 def test_a_cache_miss_fails_instead_of_calling_out(cache_only: None) -> None:
