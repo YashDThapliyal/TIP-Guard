@@ -130,8 +130,21 @@ range. Both arms are run. On 40 test-split cases per type at threshold 0.5:
 | `risk-v2` | 0.97 [0.93–1.00] n=40 | 0.29 [0.19–0.39] n=80 |
 
 The benign intervals do not overlap, so the reduction is a supported result. `risk-v2` is the
-calibrated baseline TIP-Guard is measured against; both arms run the same prompt, so the only thing
-that differs between them is canonicalization — which is the question.
+prompt every classifier-based arm from here on uses, TIP-Guard's included, so that no comparison
+below is confounded by the v1 defect.
+
+### Isolating canonicalization
+
+TIP-Guard is not one component. It is canonicalization, plus a classifier on the original text,
+plus a classifier on the canonicalized text, plus an output guard with a leak check. So comparing
+it against `input_classifier_v2` compares three differences at once and cannot attribute any
+difference to canonicalization — an earlier draft of this report claimed it could, which was wrong.
+
+The primary question is therefore answered from an ablation pair: `tip_guard` against
+`tip_guard_no_canon`, which is the same configuration with the deterministic decoders and the LLM
+canonicalizer switched off and nothing else changed. That pair differs in canonicalization alone.
+`input_output_classifier` is still reported beside it as the strongest conventional-filtering arm,
+but as a whole-system comparison, which is a weaker and different claim.
 
 ## Results
 
@@ -152,6 +165,10 @@ _Pending._
   so a spaced or punctuated variant is caught, but a value paraphrased or spelled out word-by-word
   is not. Values composed of dictionary words are the known blind spot. Violation rates are
   therefore lower bounds.
+- **The ablation removes canonicalization, not canonicalization alone.** Switching off the
+  decoders and the LLM canonicalizer also removes the second model call, so the ablated arm is
+  cheaper as well as blinder. Cost differences between the pair are therefore expected and are not
+  evidence about canonicalization's value.
 - **One operating point per arm.** Thresholds are not swept per arm; a sweep would likely improve
   every classifier-based arm and is the most obvious missing experiment.
 - **The `context` condition is a choice.** It is the condition in which attacks succeed, which is

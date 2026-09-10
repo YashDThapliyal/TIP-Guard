@@ -265,14 +265,47 @@ _FUNCTIONS: dict[str, Callable[..., Any]] = {
 }
 
 
-def _is_coda(statement: ast.stmt) -> bool:
-    """Whether a trailing statement is a display line rather than real work.
+#: The only call a coda may make. `print(msg)` is the hand-written last line
+#: the tolerance exists for; every other call is the snippet doing work.
+_CODA_CALL = "print"
 
-    Only a bare expression (`print(msg)`) or an assertion qualifies. Anything
-    that binds a name is the snippet doing something, and an unsupported
-    binding stays a refusal.
+#: Everything a display coda may be made of, besides the `print` call itself.
+#: `ast.expr` is deliberately absent -- it is the base class of every
+#: expression, so allowing it would readmit the whole grammar.
+_CODA_NODES = (ast.Expr, ast.Assert, ast.Name, ast.Constant, ast.Load, ast.keyword)
+
+
+def _is_coda(statement: ast.stmt) -> bool:
+    """Whether a trailing statement merely displays what is already computed.
+
+    Restricting by statement *type* alone is not enough: `print(...)` is an
+    `ast.Expr` whatever sits inside it, so tolerating every bare expression
+    left the evasion open one level down -- `msg = "safe"` followed by
+    `print(open("x").read())` would report "safe" as the snippet's meaning
+    while the snippet displays something else entirely.
+
+    So a coda may only name things already bound and constants. A call is
+    allowed only to `print`, and nothing may call through an attribute or a
+    subscript. Anything else is work, and unsupported work stays a refusal.
     """
-    return isinstance(statement, ast.Expr | ast.Assert | ast.Pass)
+    if isinstance(statement, ast.Pass):
+        return True
+    if not isinstance(statement, ast.Expr | ast.Assert):
+        return False
+    for node in ast.walk(statement):
+        if isinstance(node, ast.Call):
+            # `print(...)` only, and never `something.print(...)`.
+            if not (isinstance(node.func, ast.Name) and node.func.id == _CODA_CALL):
+                return False
+        elif isinstance(node, ast.Attribute | ast.Subscript | ast.Starred):
+            return False
+        elif not isinstance(node, _CODA_NODES):
+            # Enumerated rather than "anything that is not dangerous": a
+            # coda displays, it does not compute, so `print(a + b)` is
+            # refused along with `print(open(...))`. Listing what is allowed
+            # means a node type added to Python later is refused by default.
+            return False
+    return True
 
 
 class RestrictedCodeAnalyzer:

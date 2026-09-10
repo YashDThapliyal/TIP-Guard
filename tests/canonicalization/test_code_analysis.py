@@ -469,6 +469,38 @@ def test_a_trailing_assignment_to_another_name_is_still_a_refusal() -> None:
     assert analysis.rejected_reason
 
 
+def test_a_coda_may_not_do_work_of_its_own() -> None:
+    """Restricting the coda by statement *type* was not enough.
+
+    `print(...)` is an `ast.Expr` whatever sits inside it, so tolerating every
+    bare expression left the evasion open one level down: the snippet displays
+    something the analyzer never evaluated, and the guardrail is handed the
+    earlier harmless `msg` as the snippet's meaning. A coda may only display
+    names already bound and constants -- anything that calls, subscripts or
+    reaches through an attribute is the snippet doing work, and unsupported
+    work is a refusal.
+    """
+    for source in (
+        'msg = "safe"\nprint(open("x").read())',
+        'msg = "safe"\nassert open("x")',
+        'msg = "safe"\nprint(__import__("os").getcwd())',
+        'msg = "safe"\nprint(other.attr)',
+        'msg = "safe"\nprint(data[0])',
+    ):
+        analysis = _analyze(source)
+        assert analysis.result is None, f"tolerated a working coda: {source!r}"
+        assert analysis.rejected_reason
+
+
+def test_a_genuine_display_coda_is_still_tolerated() -> None:
+    # The tolerance has to survive the narrowing, or corpus resolution goes
+    # back to zero -- which is why it exists at all.
+    assert _analyze('msg = "he\u00a7\u00a7o".replace("\u00a7", "l")\nprint(msg)').result == "hello"
+    assert _analyze('msg = "hi"\nassert msg').result == "hi"
+    assert _analyze('msg = "hi"\nprint("done", msg)').result == "hi"
+    assert _analyze('msg = "hi"\npass').result == "hi"
+
+
 def test_a_comprehension_cannot_build_many_capped_strings() -> None:
     """A per-value cap bounds one string; it does not bound ten thousand.
 

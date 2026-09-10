@@ -62,6 +62,24 @@ ARMS: tuple[tuple[str, str, dict[str, str], str], ...] = (
         },
         "gpt-4o-mini",
     ),
+    # The isolation arm. `tip_guard` differs from `input_classifier_v2` in
+    # three ways at once -- canonicalization, a second input-side classifier,
+    # and an output guard -- so that pair cannot attribute a difference to
+    # canonicalization. This arm is `tip_guard` with the decoders and the LLM
+    # canonicalizer switched off and everything else identical, so the pair
+    # `tip_guard` / `tip_guard_no_canon` differs in canonicalization alone.
+    (
+        "tip_guard_no_canon",
+        "tip_guard",
+        {
+            "classifier_model": "gpt-4o-mini",
+            "canonicalizer_model": "gpt-4o-mini",
+            "prompt_version": "risk-v2",
+            "enable_decoders": "false",
+            "enable_llm_canonicalizer": "false",
+        },
+        "gpt-4o-mini",
+    ),
     # The cross-model row: the undefended arm on a second model, because the
     # pilot showed vulnerability is model-dependent and a single-model result
     # would read as a property of the attack rather than of the deployment.
