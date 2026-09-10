@@ -83,7 +83,13 @@ def _stored(arm: str) -> dict[str, CaseRecord]:
 
 
 def _replayed(arm: str) -> Iterator[tuple[str, CaseRecord, CaseRecord]]:
-    """Every stored case of `arm`, beside the record today's code produces."""
+    """Every stored case of `arm`, beside the record today's code produces.
+
+    Cases absent from the stored results are skipped, so the caller must check
+    that the number replayed equals the number stored -- otherwise a truncated
+    results file, a narrowed `splits`, or a regenerated dataset would shrink
+    the sweep while every comparison it still made passed.
+    """
     config = load_yaml_model(STUDY_CONFIGS / f"{arm}.yaml", ExperimentConfig)
     if config.cache_dir is None or not (config.cache_dir / "responses.sqlite").exists():
         pytest.skip("no response cache; replaying would make live API calls")
@@ -123,7 +129,13 @@ def test_committed_results_reproduce_under_current_code(arm: str, cache_only: No
             if was != now:
                 mismatches.append(f"{case_id}.{field}: published {was!r}, now {now!r}")
 
-    assert compared, f"{arm}: replayed nothing, so this proves nothing"
+    # Not `compared > 0`: every stored record must be replayed, or the sweep
+    # has quietly shrunk and the arms it no longer covers are unverified.
+    expected = len(_stored(arm))
+    assert compared == expected, (
+        f"{arm}: replayed {compared} of {expected} published cases. The missing ones are "
+        "unverified -- the results file, the config's splits, or the dataset has changed."
+    )
     assert not mismatches, (
         f"{arm}: the published results no longer match what this code produces, so the report "
         f"describes behaviour the library has lost ({len(mismatches)} of {compared} cases differ): "
@@ -144,6 +156,13 @@ def test_the_replay_covers_every_published_arm() -> None:
     assert arms, "no arms to replay"
     missing = sorted(set(configs) - set(arms))
     assert not missing, f"these arms have configs but no published artifact: {missing}"
+
+    # Every arm evaluated the same reportable case set, so an arm holding
+    # fewer records than its peers has a truncated results file -- which the
+    # per-arm replay would otherwise treat as its full population.
+    counts = {arm: len(_stored(arm)) for arm in arms}
+    sizes = set(counts.values())
+    assert len(sizes) == 1, f"arms disagree on how many cases they hold: {sorted(counts.items())}"
 
 
 def test_a_cache_miss_fails_instead_of_calling_out(cache_only: None) -> None:
