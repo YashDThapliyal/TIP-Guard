@@ -35,7 +35,14 @@ def _marker_is_current(marker: Path, config: ExperimentConfig) -> tuple[bool, st
         payload = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return False, f"marker unreadable ({type(exc).__name__})"
-    run_dir = Path(payload.get("run_dir", ""))
+    recorded_dir = payload.get("run_dir")
+    if not isinstance(recorded_dir, str) or not recorded_dir:
+        # Checked before constructing the Path: `Path("")` is `Path(".")`,
+        # the working directory, which is a real directory -- so a marker
+        # naming no run would have been carried past this check and refused
+        # later for the wrong reason.
+        return False, "marker names no run directory"
+    run_dir = Path(recorded_dir)
     if not run_dir.is_dir():
         return False, "run directory is gone"
     if not (run_dir / RUN_COMPLETE_MARKER).exists():
@@ -64,14 +71,21 @@ def _marker_is_current(marker: Path, config: ExperimentConfig) -> tuple[bool, st
     # The config hash covers the config, which names the dataset by *path*.
     # Regenerating the benchmark leaves every config byte-identical while
     # making every stored result stale, so the content hash is checked too.
+    #
+    # Required, not optional. An earlier version skipped this when the
+    # manifest carried no digest, which is precisely backwards: a manifest
+    # that cannot be checked is not evidence the run is current, and treating
+    # absence as agreement lets exactly the stale results this guards against
+    # through. Every check here fails closed.
     recorded = manifest.get("dataset_sha256")
-    if recorded is not None:
-        try:
-            current = hashlib.sha256(config.dataset.read_bytes()).hexdigest()
-        except OSError as exc:
-            return False, f"dataset unreadable ({type(exc).__name__})"
-        if recorded != current:
-            return False, "dataset changed since the run"
+    if not recorded:
+        return False, "manifest records no dataset digest"
+    try:
+        current = hashlib.sha256(config.dataset.read_bytes()).hexdigest()
+    except OSError as exc:
+        return False, f"dataset unreadable ({type(exc).__name__})"
+    if recorded != current:
+        return False, "dataset changed since the run"
     return True, ""
 
 
