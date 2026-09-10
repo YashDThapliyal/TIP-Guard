@@ -22,7 +22,9 @@ version sampled 40 cases from two arms -- 0.4% of the published evidence --
 while the test name claimed the published results reproduce.
 """
 
+import hashlib
 import json
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -216,17 +218,71 @@ def test_every_arm_measured_the_full_reportable_population() -> None:
         )
 
 
-def test_the_report_states_the_population_it_measured() -> None:
-    """The report quotes the case count in prose seven times.
+def test_the_dataset_is_the_one_the_runs_measured() -> None:
+    """Pins the population to the exact bytes the study ran on.
 
-    If the population changed, those numbers would be wrong and nothing else
-    would catch it -- the tables are regenerated, but the sentences are not.
+    The case count is derived from the committed dataset, which makes the
+    dataset the anchor -- and the dataset is mutable. Shrinking it *and* the
+    results together satisfied every count check, because the expected number
+    shrank in step with them. Each manifest recorded the digest of the file
+    its run read, so comparing that to the file on disk is what closes it.
     """
-    expected = _reportable_case_count()
-    text = REPORT.read_text(encoding="utf-8")
-    assert f"{expected} held-out cases" in text or f"{expected} cases" in text, (
-        f"the report does not state the {expected}-case population it measured"
+    if not MARKERS.is_dir():
+        pytest.skip(f"no committed artifacts at {MARKERS}")
+    current = hashlib.sha256(DATASET.read_bytes()).hexdigest()
+    disagree: list[str] = []
+    for marker in sorted(MARKERS.glob("*.json")):
+        run_dir = Path(json.loads(marker.read_text(encoding="utf-8"))["run_dir"])
+        recorded = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8")).get(
+            "dataset_sha256"
+        )
+        if recorded != current:
+            disagree.append(f"{marker.stem}: ran on {str(recorded)[:12]}...")
+    assert not disagree, (
+        f"the committed dataset now hashes to {current[:12]}..., which is not what these runs "
+        f"measured, so the published results describe a different population: {disagree[:5]}"
     )
+
+
+#: Case counts the report is allowed to quote, each derived from a file rather
+#: than written here: the reportable population, the whole dataset, and the
+#: gold-review subset.
+def _legitimate_case_counts() -> dict[int, str]:
+    counts = {
+        _reportable_case_count(): "reportable population",
+        len(load_cases(DATASET)): "whole dataset",
+    }
+    review = Path("data/labels/gold-review.jsonl")
+    if review.exists():
+        counts[
+            len([ln for ln in review.read_text(encoding="utf-8").splitlines() if ln.strip()])
+        ] = "gold review"
+    return counts
+
+
+def test_every_case_count_in_the_report_is_current() -> None:
+    """Every "N cases" claim in the prose, not merely one of them.
+
+    An earlier version asserted the expected count appeared *somewhere*. The
+    report says 989 in six separate sentences, so updating one and leaving
+    five stale would have passed. The tables regenerate; the prose does not.
+    """
+    text = REPORT.read_text(encoding="utf-8")
+    legitimate = _legitimate_case_counts()
+    quoted = {
+        int(match.replace(",", ""))
+        for match in re.findall(r"([\d,]+) (?:held-out |generated )?cases\b", text)
+    }
+    assert quoted, "found no case-count claims in the report; the pattern is probably wrong"
+    stale = sorted(n for n in quoted if n not in legitimate)
+    assert not stale, (
+        f"the report quotes case counts that match nothing on disk: {stale}. "
+        f"Legitimate counts are {ceil_sorted(legitimate)}"
+    )
+
+
+def ceil_sorted(counts: dict[int, str]) -> str:
+    return ", ".join(f"{n} ({what})" for n, what in sorted(counts.items()))
 
 
 def test_a_cache_miss_fails_instead_of_calling_out(cache_only: None) -> None:
