@@ -17,11 +17,12 @@ from tipguard.base import FrozenModel
 from tipguard.classifiers.prompts import (
     PROMPT_VERSION,
     RISK_CATEGORIES,
-    RISK_SYSTEM_PROMPT,
+    RISK_PROMPTS,
     format_policies_summary,
     risk_user_prompt,
 )
 from tipguard.classifiers.types import PARSER_FAILURE_CATEGORY, RiskScore
+from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
 from tipguard.models.json_utils import iter_json_objects
@@ -121,13 +122,27 @@ class LLMRiskClassifier:
     #: this classifier's scores, so a guard can record it on a run's report
     #: -- the whole reason `prompts.py` versions its prompts at all.
     prompt_version = PROMPT_VERSION
+    """Which prompt this instance used. Reported per run, because the v1 and
+    v2 arms are two measurements of the same classifier and a result table
+    that did not name the version would conflate them."""
 
     def __init__(
-        self, provider: ModelProvider, policies: PoliciesConfig, name: str = "llm_risk"
+        self,
+        provider: ModelProvider,
+        policies: PoliciesConfig,
+        name: str = "llm_risk",
+        prompt_version: str = PROMPT_VERSION,
     ) -> None:
+        if prompt_version not in RISK_PROMPTS:
+            raise ConfigError(
+                f"unknown risk prompt version {prompt_version!r}; "
+                f"known versions: {sorted(RISK_PROMPTS)}"
+            )
         self.provider = provider
         self.policies = policies
         self.name = name
+        self.prompt_version = prompt_version
+        self._system_prompt = RISK_PROMPTS[prompt_version]
         #: Set on every `score()` call, successful or not, so a guard
         #: wrapping this classifier can add the call's tokens, cost and
         #: latency to a run's report even when the reply did not parse.
@@ -150,7 +165,7 @@ class LLMRiskClassifier:
         self.last_usage = None
         request = ModelRequest.simple(
             risk_user_prompt(text, self._policies_summary),
-            system=RISK_SYSTEM_PROMPT,
+            system=self._system_prompt,
             response_format="json",
             max_tokens=MAX_TOKENS,
         )

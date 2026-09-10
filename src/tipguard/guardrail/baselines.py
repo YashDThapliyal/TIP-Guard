@@ -13,6 +13,7 @@ from typing import Any
 from tipguard.classifiers.keyword import KeywordClassifier
 from tipguard.classifiers.llm_risk import LLMRiskClassifier
 from tipguard.classifiers.pattern import PatternClassifier
+from tipguard.classifiers.prompts import PROMPT_VERSION
 from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.models.registry import ProviderRegistry
@@ -32,7 +33,9 @@ DEFAULT_THRESHOLD = 0.5
 #: mapping, so a mistyped key would otherwise fall back to the default in
 #: silence -- and a Phase 7 threshold sweep that mistyped one would report the
 #: default arm as though it had swept.
-KNOWN_PARAMS = frozenset({"classifier_model", "input_threshold", "output_threshold", "leak_check"})
+KNOWN_PARAMS = frozenset(
+    {"classifier_model", "prompt_version", "input_threshold", "output_threshold", "leak_check"}
+)
 
 _TRUE = frozenset({"true", "yes", "on", "1"})
 _FALSE = frozenset({"false", "no", "off", "0"})
@@ -83,8 +86,22 @@ def _leak_check(params: Mapping[str, Any], defense: str) -> bool:
 def _llm_classifier(
     params: dict[str, Any], registry: ProviderRegistry, policies: PoliciesConfig, name: str
 ) -> LLMRiskClassifier:
+    """Build the risk classifier an arm screens with.
+
+    `prompt_version` is a config parameter rather than a constant because the
+    study runs the same defence under two risk prompts, and which one a run
+    used has to survive into its artifacts -- an arm that reported `risk-v2`
+    while scoring with `risk-v1` would invert the finding it exists to
+    support. `LLMRiskClassifier` rejects an unknown version, so a typo fails
+    the build instead of quietly scoring with the default.
+    """
     alias = str(params.get("classifier_model", DEFAULT_CLASSIFIER_MODEL))
-    return LLMRiskClassifier(provider=registry.get(alias), policies=policies, name=name)
+    return LLMRiskClassifier(
+        provider=registry.get(alias),
+        policies=policies,
+        name=name,
+        prompt_version=str(params.get("prompt_version", PROMPT_VERSION)),
+    )
 
 
 def keyword_filter(

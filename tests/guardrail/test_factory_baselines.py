@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from tipguard.classifiers.llm_risk import LLMRiskClassifier
 from tipguard.config.loader import ConfigError, load_yaml_model
 from tipguard.config.schemas import (
     DefenseConfig,
@@ -12,6 +13,7 @@ from tipguard.config.schemas import (
     PoliciesConfig,
 )
 from tipguard.guardrail.factory import build_guardrail
+from tipguard.guardrail.threshold import ThresholdGuard
 from tipguard.models.mock import MockProvider
 from tipguard.models.registry import ProviderRegistry
 
@@ -276,3 +278,41 @@ def test_a_bad_threshold_is_a_config_error_not_a_raw_valueerror(
             "mock-main",
             policies,
         )
+
+
+def test_the_classifier_prompt_version_is_read_from_params(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """The study runs the same defence under two risk prompts, so which one a
+    run used has to come from the config rather than from a module constant --
+    otherwise the two arms are indistinguishable in the artifacts they leave.
+
+    An unknown version must fail here rather than silently falling back: an
+    arm that reported `risk-v2` while scoring with `risk-v1` would invert the
+    finding it exists to support.
+    """
+    with pytest.raises(ConfigError, match="unknown risk prompt version"):
+        build_guardrail(
+            DefenseConfig(name="input_classifier", params={"prompt_version": "risk-v99"}),
+            registry,
+            "mock-main",
+            policies,
+        )
+
+
+def test_a_named_prompt_version_reaches_the_classifier(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    guard = build_guardrail(
+        DefenseConfig(name="input_classifier", params={"prompt_version": "risk-v2"}),
+        registry,
+        "mock-main",
+        policies,
+    )
+    # Reaching for the guard's classifier is the only way to prove the value
+    # travelled: the two arms differ in nothing else a caller can observe.
+    # `build_guardrail` returns the protocol, so narrow before reaching in.
+    assert isinstance(guard, ThresholdGuard)
+    classifier = guard._input_classifier
+    assert isinstance(classifier, LLMRiskClassifier)
+    assert classifier.prompt_version == "risk-v2"
