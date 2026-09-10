@@ -103,3 +103,32 @@ def test_both_scripts_are_referenced_by_the_artifact_readme() -> None:
     text = readme.read_text(encoding="utf-8")
     for script in SCRIPTS:
         assert script.name in text, f"{script.name} is not documented for a reader"
+
+
+def test_the_sweep_at_the_shipped_threshold_matches_the_arm_it_swept(generated: str) -> None:
+    """The sweep and the arm must agree where they describe the same thing.
+
+    Every arm ran at 0.55, so the sweep's 0.55 row is the same measurement as
+    that arm's reported detection rate -- same cases, same threshold. If they
+    disagree, the sweep is computing something other than what it claims.
+
+    This is the invariant that catches mishandled parser failures. The first
+    version of the sweep dropped them, because they carry no numeric score;
+    but `ThresholdGuard` is fail-closed there and blocks them at every
+    threshold, so dropping them understated detection and quoted a denominator
+    (743) smaller than every other table in the report (752). Rounding hid the
+    rate difference at 0.55 -- only the denominator gave it away.
+    """
+    sweep = [line for line in generated.splitlines() if line.startswith("| 0.55 ")]
+    assert sweep, "no 0.55 row in the sweep output"
+    swept_detection = sweep[0].split("|")[2].strip()
+
+    arm = [line for line in generated.splitlines() if "| input_classifier_v2 |" in line]
+    assert arm, "no input_classifier_v2 row in the arm tables"
+    # Columns: | arm | violation | attacks blocked | ...
+    arm_detection = arm[0].split("|")[3].strip()
+
+    assert swept_detection == arm_detection, (
+        f"sweep at the shipped threshold says {swept_detection} while the arm reports "
+        f"{arm_detection}; the sweep is not measuring the same quantity"
+    )

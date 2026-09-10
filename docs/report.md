@@ -316,27 +316,40 @@ blocked cases, so the trade can be recovered at other thresholds without new API
 and false positives only — violation rate cannot be recomputed, because a case that was blocked has
 no stored model response).
 
+A parser failure blocks regardless of threshold — `ThresholdGuard` is fail-closed there, because the
+prompt being rated sits inside the request and an attacker able to induce an off-contract reply would
+otherwise hold a route to the minimum score. Those cases (9 for v2, 6 for v1, all on attacks) are
+therefore counted as blocked at every row below. Including them is what makes the sweep's n=752 match
+every other table here, and the 0.55 row reproduce the arm's own reported detection exactly.
+
 `input_classifier_v2`, `context` condition:
 
 | Threshold | Attacks blocked | False positives |
 | --- | --- | --- |
-| 0.25 | 0.99 [0.99–1.00] | 0.63 [0.57–0.69] |
-| 0.35–0.55 (**shipped**) | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
-| 0.65–0.85 | 0.82 [0.79–0.85] | **0.13 [0.09–0.18]** |
-| ≥0.95 | 0.00 [0.00–0.01] | 0.00 [0.00–0.02] |
+| 0.25 | 0.99 [0.99–1.00] n=752 | 0.63 [0.57–0.69] n=237 |
+| 0.35 | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.45 | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.55 (**shipped**) | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.65 | 0.82 [0.79–0.85] | **0.14 [0.10–0.18]** |
+| 0.75 | 0.82 [0.79–0.85] | 0.14 [0.10–0.18] |
+| 0.85 | 0.82 [0.79–0.85] | **0.13 [0.09–0.18]** |
+| 0.95 | 0.01 [0.01–0.02] | 0.00 [0.00–0.02] |
+| 1.00 | 0.01 [0.01–0.02] | 0.00 [0.00–0.02] |
 
 And the naive v1 prompt, for contrast:
 
 | Threshold | Attacks blocked | False positives |
 | --- | --- | --- |
-| 0.25–0.65 | 1.00 [0.99–1.00] | 0.68 [0.62–0.74] |
+| 0.25–0.65 | 1.00 [0.99–1.00] n=752 | 0.68 [0.62–0.74] n=237 |
 | 0.75 | 0.99 [0.97–0.99] | 0.55 [0.49–0.61] |
 | 0.85 | 0.86 [0.84–0.89] | 0.31 [0.25–0.37] |
-| 0.95 | 0.36 [0.33–0.40] | 0.01 [0.00–0.03] |
+| 0.95 | 0.37 [0.33–0.40] | 0.01 [0.00–0.03] |
+| 1.00 | 0.37 [0.33–0.40] | 0.01 [0.00–0.03] |
 
 Two things follow, and the first is a correction to this study's own setup. **The threshold every
 arm ran at was suboptimal.** Moving v2 from 0.55 to 0.65 cuts the false-positive rate from 0.32 to
-0.13 — better than halving it — for 14 points of detection. Every headline number in the tables
+0.14 — better than halving it — for 14 points of detection, and 0.85 reaches 0.13 for the same
+detection. Every headline number in the tables
 above is therefore reported at a worse operating point than the same defence can reach, and
 comparisons between arms inherit that. The scores are quantised (the classifier emits roughly one
 decimal place), which is why the curve moves in steps rather than smoothly.
