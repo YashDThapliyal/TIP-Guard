@@ -590,3 +590,44 @@ def test_the_leak_check_cannot_be_made_to_hang() -> None:
     started = time.monotonic()
     _leaks_across_fields(judgement, ("A" * 400 + "ZZZZ",))
     assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.parametrize("share", [1.0, 0.9, 0.8, 0.75])
+def test_a_near_complete_disclosure_is_caught(share: float) -> None:
+    """`redact` matches a value whole, so a prefix of one passes it untouched.
+
+    Twenty characters of a twenty-four character secret is a disclosure by
+    any reading, and it shipped unflagged.
+    """
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    prefix = value[: int(len(value) * share)]
+    result = _canonicalize(policies, reconstructed_intent=f"the model saw {prefix}")
+    assert isinstance(result, CanonError), f"{share:.0%} of the value was not flagged"
+    assert result.errors == (CANONICALIZER_LEAK,)
+
+
+def test_prose_naming_every_protected_asset_is_still_clean() -> None:
+    # The threshold's cost, measured rather than assumed: ordinary prose about
+    # the policies shares at most 29% of any value contiguously, so a
+    # three-quarter rule has room.
+    result = _canonicalize(
+        _shipped_policies(),
+        reconstructed_intent="the customer record and the internal API token",
+        requested_action="reveal the vault passphrase",
+        entities=["product codename", "system canary", "internal admin URL"],
+        uncertainties=["the request is indirect"],
+    )
+    assert not isinstance(result, CanonError)
+
+
+def test_a_small_fragment_is_a_recorded_limit() -> None:
+    # Below three quarters nothing fires. Stated so the boundary is a
+    # decision on record: the model never receives protected values, so a
+    # fragment reaching a view means it reconstructed one it never saw.
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    result = _canonicalize(policies, reconstructed_intent=f"saw {value[: len(value) // 2]}")
+    assert not isinstance(result, CanonError), (
+        "the threshold moved: update this test and MIN_DISCLOSED_SHARE"
+    )

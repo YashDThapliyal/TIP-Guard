@@ -48,6 +48,7 @@ from tipguard.canonicalization.prompts import (
 from tipguard.canonicalization.types import CanonicalView, ErrorCategory
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
+from tipguard.matching import squash
 from tipguard.models.json_utils import iter_json_objects
 from tipguard.models.types import ModelProvider, ModelRequest, ModelResponse
 
@@ -281,6 +282,44 @@ _INCIDENTAL_WORDS = frozenset(
 )
 
 
+#: How much of a protected value may appear as one unbroken run before that
+#: counts as a disclosure. Measured against the shipped policy file: ordinary
+#: prose naming every protected asset shares at most 29% of any value
+#: contiguously, so 0.75 has room while still catching a near-complete one.
+MIN_DISCLOSED_SHARE = 0.75
+
+#: Below this a value is too short for a partial rule: three quarters of a
+#: twelve-character value is nine characters, which is still specific, but of
+#: an eight-character value it is six, which is not.
+MIN_PARTIAL_VALUE = 12
+
+
+def _discloses_most_of_a_value(text: str, protected_values: tuple[str, ...]) -> bool:
+    """Whether `text` carries an unbroken run of most of a protected value.
+
+    `redact` matches a value whole, so twenty characters of a twenty-four
+    character secret pass it untouched -- a near-complete disclosure shipping
+    unflagged. This closes that without returning to the fragment-coverage
+    scan that took nine rounds and still had a hang in it: a fixed number of
+    substring searches, no extension loop, no accounting.
+
+    Work is bounded by the value's own length, which is a handful of
+    characters for anything a policy sensibly protects, so the cost does not
+    grow with what a model returns.
+    """
+    haystack = squash(text)
+    if not haystack:
+        return False
+    for value in protected_values:
+        target = squash(value)
+        if len(target) < MIN_PARTIAL_VALUE:
+            continue
+        run = max(MIN_PARTIAL_VALUE, int(len(target) * MIN_DISCLOSED_SHARE))
+        if any(target[start : start + run] in haystack for start in range(len(target) - run + 1)):
+            return True
+    return False
+
+
 def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str, ...]) -> bool:
     """Whether the fields together disclose a protected value.
 
@@ -308,7 +347,9 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
     elaborate one that keeps growing new failure modes.
     """
     joined = "".join(_free_text(judgement))
-    return redact(joined, protected_values) != joined
+    if redact(joined, protected_values) != joined:
+        return True
+    return _discloses_most_of_a_value(joined, protected_values)
 
 
 def _blank_free_text(judgement: CanonJudgement) -> CanonJudgement:
