@@ -388,17 +388,29 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
                 # of the value: a 2,000-character value against an 80KB field
                 # took 7.4 seconds. Finding the shortest run once and walking
                 # forward from there compares single characters instead.
-                position = haystack.find(target[start : start + MIN_FRAGMENT])
+                probe = target[start : start + MIN_FRAGMENT]
+                end = start + MIN_FRAGMENT
+                position = haystack.find(probe)
                 if position == -1:
                     start += 1
                     continue
-                end = start + MIN_FRAGMENT
-                while (
-                    end < len(target)
-                    and position + (end - start) < len(haystack)
-                    and haystack[position + (end - start)] == target[end]
-                ):
-                    end += 1
+                # Every occurrence, not the first. Extending from the first
+                # match alone reported no leak for a field containing the
+                # entire value, because an earlier partial match stopped
+                # short: "ABCDEFzz ABCDEFGHIJKLMNOP" found "ABCDEF" at the
+                # front and never looked past it.
+                while position != -1:
+                    reach = start + MIN_FRAGMENT
+                    while (
+                        reach < len(target)
+                        and position + (reach - start) < len(haystack)
+                        and haystack[position + (reach - start)] == target[reach]
+                    ):
+                        reach += 1
+                    end = max(end, reach)
+                    if end >= len(target):
+                        break
+                    position = haystack.find(probe, position + 1)
                 end += 1
                 # Only a run that cannot be extended leftwards is counted.
                 # A sub-run of a longer match -- "ystemcanary" inside

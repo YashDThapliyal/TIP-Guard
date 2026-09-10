@@ -776,3 +776,29 @@ def test_the_coverage_scan_alone_catches_overlapping_fragments() -> None:
         uncertainties=[],
     )
     assert _leaks_across_fields(judgement, values)
+
+
+def test_an_earlier_partial_match_does_not_hide_a_later_whole_one() -> None:
+    """The bypass a one-shot `find` introduced.
+
+    Extending from the first occurrence alone reported no leak for a field
+    that contained the entire protected value, because a shorter partial
+    match sat in front of it and the scan never looked past.
+    """
+    from tipguard.canonicalization.llm_canonicalizer import (
+        CanonJudgement,
+        _leaks_across_fields,
+    )
+
+    value = "ABCDEFGHIJKLMNOP"
+    judgement = CanonJudgement(
+        contains_transformation=True,
+        transformation=None,
+        reconstructed_intent=f"ABCDEFzz {value}",
+        requested_action="y",
+        entities=[],
+        policy_categories=["none"],
+        confidence=0.5,
+        uncertainties=[],
+    )
+    assert _leaks_across_fields(judgement, (value,))
