@@ -40,6 +40,23 @@ from tipguard.models.types import ModelRequest, ModelResponse
 
 MARKERS = Path("artifacts/study-v1/markers")
 STUDY_CONFIGS = Path("experiments/study")
+DATASET = Path("data/generated/tipguard-v1.jsonl")
+REPORT = Path("docs/report.md")
+
+#: The splits a result may be reported on. `train` and `dev` exist for tuning,
+#: so measuring on them would report performance on data a defence was fitted
+#: to. Stated here rather than read from the configs, because the configs are
+#: one of the things that can shrink -- deriving the expected population from
+#: them would make the check circular.
+REPORTABLE_SPLITS = frozenset(
+    {
+        "test",
+        "heldout_transformation",
+        "heldout_policy",
+        "heldout_paraphrase",
+        "heldout_compositional",
+    }
+)
 
 
 class ReplayCacheMissError(AssertionError):
@@ -163,6 +180,53 @@ def test_the_replay_covers_every_published_arm() -> None:
     counts = {arm: len(_stored(arm)) for arm in arms}
     sizes = set(counts.values())
     assert len(sizes) == 1, f"arms disagree on how many cases they hold: {sorted(counts.items())}"
+
+    # And anchored to an absolute number, not just to each other. Requiring
+    # only that the arms agree lets the whole study shrink in step -- every
+    # config narrowed, or the dataset regenerated smaller -- with each arm
+    # still replaying everything it stored and every arm still matching its
+    # peers. The population comes from the committed dataset, whose digest
+    # each run's manifest records.
+    expected = _reportable_case_count()
+    assert sizes == {expected}, (
+        f"every arm holds {sizes.pop()} cases but the dataset has {expected} reportable ones; "
+        "the study population has changed"
+    )
+
+
+def _reportable_case_count() -> int:
+    return sum(1 for case in load_cases(DATASET) if case.split.value in REPORTABLE_SPLITS)
+
+
+def test_every_arm_measured_the_full_reportable_population() -> None:
+    """The configs must ask for every reportable split, not a subset.
+
+    Checked separately from the record counts because the two can drift apart:
+    a config could name fewer splits while an old results file still held the
+    full set.
+    """
+    configs = sorted(STUDY_CONFIGS.glob("*.yaml"))
+    assert configs, "no study configs"
+    for path in configs:
+        config = load_yaml_model(path, ExperimentConfig)
+        named = {split.value for split in config.splits}
+        assert named == set(REPORTABLE_SPLITS), (
+            f"{path.name} measures {sorted(named)}, not the reportable population "
+            f"{sorted(REPORTABLE_SPLITS)}"
+        )
+
+
+def test_the_report_states_the_population_it_measured() -> None:
+    """The report quotes the case count in prose seven times.
+
+    If the population changed, those numbers would be wrong and nothing else
+    would catch it -- the tables are regenerated, but the sentences are not.
+    """
+    expected = _reportable_case_count()
+    text = REPORT.read_text(encoding="utf-8")
+    assert f"{expected} held-out cases" in text or f"{expected} cases" in text, (
+        f"the report does not state the {expected}-case population it measured"
+    )
 
 
 def test_a_cache_miss_fails_instead_of_calling_out(cache_only: None) -> None:
