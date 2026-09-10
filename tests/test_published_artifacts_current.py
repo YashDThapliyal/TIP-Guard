@@ -255,6 +255,21 @@ PILOT_SAMPLE_SIZES = frozenset({20, 40})
 #: Must start with a digit: `[\d,]+` alone matched a bare comma in the report.
 _COUNT_CLAIM = re.compile(r"(?<![\d.])(\d[\d,]*)(?:-case|\s+(?:[a-z_-]+\s+){0,2}cases?\b)")
 
+#: Slash-form claims like "the full 752/237-case arm", which pair a
+#: prohibited-case count with a benign one. `_COUNT_CLAIM` sees only the
+#: number touching `-case`, so the numerator was never checked -- altering
+#: 752 there changed nothing that any test read.
+_SLASH_COUNT_CLAIM = re.compile(r"(?<![\d.])(\d[\d,]*)/(\d[\d,]*)-case")
+
+
+def _quoted_counts(text: str) -> set[int]:
+    """Every case count the prose claims, in both forms."""
+    found = {int(match.replace(",", "")) for match in _COUNT_CLAIM.findall(text)}
+    for numerator, denominator in _SLASH_COUNT_CLAIM.findall(text):
+        found.add(int(numerator.replace(",", "")))
+        found.add(int(denominator.replace(",", "")))
+    return found
+
 
 def _legitimate_case_counts() -> dict[int, str]:
     """Counts the report may quote, each derived from a file.
@@ -296,7 +311,7 @@ def test_every_case_count_in_the_report_is_current() -> None:
     """
     text = REPORT.read_text(encoding="utf-8")
     legitimate = _legitimate_case_counts()
-    quoted = {int(match.replace(",", "")) for match in _COUNT_CLAIM.findall(text)}
+    quoted = _quoted_counts(text)
     assert quoted, "found no case-count claims in the report; the pattern is probably wrong"
     stale = sorted(n for n in quoted if n not in legitimate and n not in PILOT_SAMPLE_SIZES)
     assert not stale, (
@@ -320,14 +335,16 @@ def test_the_count_pattern_sees_the_claims_that_are_there() -> None:
         ("26 direct cases", 26),
         ("1,700 generated cases", 1700),
         ("the 752/237-case arm", 237),
+        # Both halves of a slash form, since only the second touches `-case`.
+        ("the 752/237-case arm", 752),
         ("170-case gold subset", 170),
         ("40-case-per-type pilot", 40),
     ):
-        found = {int(m.replace(",", "")) for m in _COUNT_CLAIM.findall(phrase)}
+        found = _quoted_counts(phrase)
         assert expected in found, f"the pattern missed {expected} in {phrase!r} (found {found})"
 
     # And must not read a rate as a count.
-    assert not _COUNT_CLAIM.findall("leaks on 0.75 of prohibited cases"), (
+    assert not _quoted_counts("leaks on 0.75 of prohibited cases"), (
         "the pattern read a decimal as a case count"
     )
 
