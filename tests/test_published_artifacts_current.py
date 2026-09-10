@@ -418,6 +418,27 @@ def test_the_readme_avoids_em_dashes() -> None:
     assert "\u2014" not in text, "the README contains an em dash"
 
 
+#: Words that mark a figure as what the study actually paid, against what a
+#: fresh run would pay. Checked around each amount because the two are easy to
+#: transpose and the transposition reads perfectly well.
+BILLED_WORDS = frozenset({"billed", "spent", "spend"})
+COLD_WORDS = frozenset({"cold", "reproduc", "from scratch"})
+
+#: A figure's claim is the sentence it sits in. A fixed character window is
+#: too blunt: 160 characters after "$3.92" reaches into the next sentence,
+#: which is about the cold cost, and the check then failed on correct prose.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?:])\s+")
+
+
+def _sentences_containing(text: str, needle: str) -> list[str]:
+    """Every sentence in which `needle` appears."""
+    return [
+        sentence.replace("\n", " ")
+        for sentence in _SENTENCE_SPLIT.split(text)
+        if needle in sentence
+    ]
+
+
 def _spend_from_artifacts() -> tuple[float, float, int]:
     """Notional cost, billed cost, and model calls, from the run records.
 
@@ -457,12 +478,24 @@ def test_the_readme_states_both_costs_correctly() -> None:
     notional, billed, calls = _spend_from_artifacts()
     text = README.read_text(encoding="utf-8")
 
-    assert f"${notional:.2f}" in text, (
-        f"the README does not quote the cold-reproduction cost of ${notional:.2f}"
-    )
-    assert f"${billed:.2f}" in text, (
-        f"the README does not quote the study's actual spend of ${billed:.2f}"
-    )
+    # Presence is not enough: swapping the two figures leaves both on the page
+    # and reproduces the original error inverted, claiming the study cost the
+    # cold figure. So each amount is checked against the words around it.
+    for amount, expected, forbidden, meaning in (
+        (billed, BILLED_WORDS, COLD_WORDS, "what the study actually spent"),
+        (notional, COLD_WORDS, BILLED_WORDS, "what a cold reproduction pays"),
+    ):
+        windows = _sentences_containing(text, f"${amount:.2f}")
+        assert windows, f"the README does not quote ${amount:.2f}, {meaning}"
+        for window in windows:
+            assert any(word in window for word in expected), (
+                f"${amount:.2f} is {meaning}, but the text around it says none of "
+                f"{sorted(expected)}: {window!r}"
+            )
+            assert not any(word in window for word in forbidden), (
+                f"${amount:.2f} is {meaning}, but the text around it claims the opposite "
+                f"by mentioning one of {sorted(forbidden)}: {window!r}"
+            )
     # Every occurrence, not merely one. The call count appears twice, so an
     # existence check passed while one of them was edited to 28,000 -- the
     # same existence-versus-all gap already fixed for the case counts.
