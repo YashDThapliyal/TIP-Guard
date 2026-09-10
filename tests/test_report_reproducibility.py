@@ -296,39 +296,51 @@ def test_the_gold_review_is_scored_from_the_file_that_exists() -> None:
     )
 
 
+def _criteria_row(generated: str, criterion: str) -> str:
+    """The `Measured` cell of the success-criteria row naming `criterion`.
+
+    Anchored to the row rather than to a phrase anywhere in the output. An
+    earlier version searched both scripts' whole output for "all N modules"
+    and picked by substring, so it no longer verified the criteria rows
+    existed at all -- any other line of that shape would have satisfied it.
+    The version before that keyed on a literal phrase inside the row, and
+    broke silently when the row was reworded.
+    """
+    block = generated[generated.index("Pre-registered success criteria") :]
+    for line in block.splitlines():
+        if not line.startswith("| "):
+            continue
+        cells = line.split("|")
+        if len(cells) > 3 and criterion in cells[1]:
+            return cells[2].strip()
+    raise AssertionError(f"no success-criteria row mentioning {criterion!r}")
+
+
 def test_the_criteria_checks_state_the_scope_they_actually_covered(generated: str) -> None:
     """The two scored assertions must report the scope they really examined.
 
     Both were once narrower than they claimed. The manifest row read a single
     marker and reported "met" for the study, so nineteen broken manifests
     would have passed. The no-execution row scanned one directory, so an
-    execution path introduced anywhere else in the library was invisible.
-    Tying the counts in the prose to the counts on disk is what stops the
-    scope quietly shrinking again.
+    execution path introduced anywhere else was invisible. Tying each row's
+    stated scope to the count on disk is what stops it shrinking again.
     """
     manifests = len(list(MARKERS.glob("*.json")))
     modules = len(
         [path for root in (Path("src/tipguard"), Path("scripts")) for path in root.rglob("*.py")]
     )
 
-    # Matched by shape rather than by a fixed phrase. An earlier version keyed
-    # on the literal "package modules, by AST walk"; widening the scan to
-    # include `scripts/` reworded that line to "library and script modules",
-    # and the test then failed for the wrong reason -- it could no longer find
-    # the row at all, which reads as "the criterion stopped reporting its
-    # scope" rather than "the wording changed".
-    scoped = re.compile(r"all (\d+) ((?:run manifests|[a-z ]*modules))")
-    claims = {
-        kind.strip(): int(count) for count, kind in (m.groups() for m in scoped.finditer(generated))
-    }
-    manifest_claim = next((v for k, v in claims.items() if "manifest" in k), None)
-    module_claim = next((v for k, v in claims.items() if "module" in k), None)
+    def scope_of(criterion: str) -> int:
+        measured = _criteria_row(generated, criterion)
+        found = re.search(r"all (\d+)", measured)
+        assert found, f"the {criterion!r} row no longer states a scope: {measured!r}"
+        return int(found.group(1))
 
-    assert manifest_claim is not None, f"no manifest scope claim found in:\n{sorted(claims)}"
-    assert module_claim is not None, f"no module scope claim found in:\n{sorted(claims)}"
-    assert manifest_claim == manifests, (
-        f"the manifest check claims {manifest_claim} runs; {manifests} are on disk"
+    manifest_scope = scope_of("Record reproducible")
+    module_scope = scope_of("Prevent execution")
+    assert manifest_scope == manifests, (
+        f"the manifest check claims {manifest_scope} runs; {manifests} are on disk"
     )
-    assert module_claim == modules, (
-        f"the execution scan claims {module_claim} modules; {modules} are on disk"
+    assert module_scope == modules, (
+        f"the execution scan claims {module_scope} modules; {modules} are on disk"
     )
