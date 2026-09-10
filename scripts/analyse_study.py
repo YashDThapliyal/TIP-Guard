@@ -23,6 +23,7 @@ ARM_ORDER = (
     "input_classifier",
     "input_classifier_v2",
     "input_output_classifier",
+    "input_output_classifier_v2",
     "tip_guard_no_canon",
     "tip_guard",
 )
@@ -37,10 +38,13 @@ ARM_ORDER = (
 CANON_ABLATION = ("tip_guard", "tip_guard_no_canon")
 
 #: The strongest conventional-filtering arm, for the separate and weaker
-#: claim of whole-system comparison. Both run the calibrated risk prompt, so
-#: this is not confounded by the v1 prompt defect -- but it remains a
-#: comparison of two different systems, not of one component.
-CONVENTIONAL_BASELINE = "input_output_classifier"
+#: claim of whole-system comparison. It must be the *v2* arm: the v1 arm
+#: screens with a prompt that treats encoding as evidence, so comparing
+#: TIP-Guard against it would measure that prompt defect and report the
+#: difference as canonicalization. This is a comparison of two different
+#: systems either way, not of one component -- that is what CANON_ABLATION
+#: is for -- but at least the two systems screen with the same prompt.
+CONVENTIONAL_BASELINE = "input_output_classifier_v2"
 
 
 def load_records(run_dir: Path) -> list[CaseRecord]:

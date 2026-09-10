@@ -129,9 +129,14 @@ range. Both arms are run. On 40 test-split cases per type at threshold 0.5:
 | `risk-v1` | 1.00 [1.00–1.00] n=40 | 0.59 [0.49–0.70] n=80 |
 | `risk-v2` | 0.97 [0.93–1.00] n=40 | 0.29 [0.19–0.39] n=80 |
 
-The benign intervals do not overlap, so the reduction is a supported result. `risk-v2` is the
-prompt every classifier-based arm from here on uses, TIP-Guard's included, so that no comparison
-below is confounded by the v1 defect.
+The benign intervals do not overlap, so the reduction is a supported result.
+
+Both prompts are kept, and each classifier-based defence is run under both. That matters for
+comparison hygiene: a defence screening with v1 and a defence screening with v2 are not comparable,
+because a difference between them may be nothing but the prompt defect. So every comparison below
+is between arms running the *same* prompt version, and `tip_guard` is compared only against v2
+arms. An earlier draft of this report claimed v2 was used everywhere from this point on; it was
+not, and the comparison it licensed would have been confounded.
 
 ### Isolating canonicalization
 
@@ -143,8 +148,9 @@ difference to canonicalization — an earlier draft of this report claimed it co
 The primary question is therefore answered from an ablation pair: `tip_guard` against
 `tip_guard_no_canon`, which is the same configuration with the deterministic decoders and the LLM
 canonicalizer switched off and nothing else changed. That pair differs in canonicalization alone.
-`input_output_classifier` is still reported beside it as the strongest conventional-filtering arm,
-but as a whole-system comparison, which is a weaker and different claim.
+`input_output_classifier_v2` is still reported beside it as the strongest conventional-filtering
+arm, but as a whole-system comparison, which is a weaker and different claim — and it is the v2
+arm specifically, so that the two systems at least screen with the same prompt.
 
 ## Results
 

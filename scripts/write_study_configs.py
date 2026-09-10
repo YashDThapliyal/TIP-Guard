@@ -52,6 +52,18 @@ ARMS: tuple[tuple[str, str, dict[str, str], str], ...] = (
         {"classifier_model": "gpt-4o-mini"},
         "gpt-4o-mini",
     ),
+    # The conventional arm TIP-Guard is actually compared against. It must
+    # run the same risk prompt as TIP-Guard: the v1 arm above screens with a
+    # prompt that treats encoding as evidence, so comparing TIP-Guard to it
+    # would measure that prompt defect and call the difference
+    # canonicalization. Both v1 and v2 are kept -- the v1 pair is the
+    # naive-filtering finding, the v2 pair is the fair comparison.
+    (
+        "input_output_classifier_v2",
+        "input_output_classifier",
+        {"classifier_model": "gpt-4o-mini", "prompt_version": "risk-v2"},
+        "gpt-4o-mini",
+    ),
     (
         "tip_guard",
         "tip_guard",
