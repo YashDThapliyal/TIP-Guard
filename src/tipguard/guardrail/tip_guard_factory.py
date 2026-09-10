@@ -36,6 +36,18 @@ DEFAULT_RULE = "max"
 #: Every parameter this pipeline reads, and what it resolves to when a config
 #: omits it. Single source of both, so a run's manifest can record what an
 #: omitted parameter actually became; see `baselines.DEFAULTS`.
+#:
+#: `enable_code_analyzer` is deliberately absent. It was accepted, parsed, and
+#: then discarded: code analysis reaches a snippet through
+#: `DeterministicCanonicalizer`, which builds its own `RestrictedCodeAnalyzer`,
+#: so the switch could not turn anything off. Harmless while nothing reported
+#: it -- but `effective_defense_params` would have recorded
+#: `enable_code_analyzer: false` as a setting that took effect, which is the
+#: misreport this mapping exists to prevent. A config naming it now fails
+#: rather than being told an ablation happened that did not. Wiring the
+#: analyzer through the deterministic canonicalizer would make the switch
+#: real; until someone needs that ablation, refusing it is the honest
+#: behaviour.
 DEFAULTS: dict[str, Any] = {
     "canonicalizer_model": DEFAULT_CANONICALIZER_MODEL,
     "classifier_model": DEFAULT_CLASSIFIER_MODEL,
@@ -44,7 +56,6 @@ DEFAULTS: dict[str, Any] = {
     "threshold": DEFAULT_THRESHOLD,
     "enable_detector": True,
     "enable_decoders": True,
-    "enable_code_analyzer": True,
     "enable_llm_canonicalizer": True,
     "enable_original_classifier": True,
     "enable_output_guard": True,
@@ -109,12 +120,6 @@ def build_tip_guard(
 
     enable_detector = parse_bool(params, "enable_detector", DEFAULTS["enable_detector"], name)
     enable_decoders = parse_bool(params, "enable_decoders", DEFAULTS["enable_decoders"], name)
-    # `RestrictedCodeAnalyzer` is always built: `MultiViewCanonicalizer.run`
-    # does not call it directly today (see its own docstring), so there is
-    # nothing yet for this switch to turn off. Still parsed and validated so
-    # a config naming it gets a real boolean check rather than a silent
-    # "unknown param" rejection once a later phase wires the analyzer in.
-    parse_bool(params, "enable_code_analyzer", DEFAULTS["enable_code_analyzer"], name)
     enable_llm_canonicalizer = parse_bool(
         params, "enable_llm_canonicalizer", DEFAULTS["enable_llm_canonicalizer"], name
     )

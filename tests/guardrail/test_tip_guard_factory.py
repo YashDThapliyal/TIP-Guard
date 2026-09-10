@@ -89,7 +89,6 @@ def test_an_unknown_model_alias_is_a_config_error(
     [
         "enable_detector",
         "enable_decoders",
-        "enable_code_analyzer",
         "enable_llm_canonicalizer",
         "enable_original_classifier",
         "enable_output_guard",
@@ -239,3 +238,57 @@ def test_an_unknown_prompt_version_fails_the_tip_guard_build(
             "mock-main",
             policies,
         )
+
+
+def test_the_discarded_code_analyzer_switch_is_refused(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """`enable_code_analyzer` was accepted and then ignored.
+
+    Code analysis reaches a snippet through `DeterministicCanonicalizer`,
+    which constructs its own `RestrictedCodeAnalyzer`, so the switch could not
+    disable anything. That was merely useless until manifests began recording
+    resolved parameters -- at which point a config setting it would have been
+    told, in the run's own record, that an ablation took effect which did not.
+    Refusing it is the honest behaviour.
+    """
+    with pytest.raises(ConfigError, match="unknown params"):
+        build_guardrail(
+            DefenseConfig(name="tip_guard", params={"enable_code_analyzer": False}),
+            registry,
+            "mock-main",
+            policies,
+        )
+
+
+def test_code_analysis_still_runs_for_a_code_case(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """The reason the switch cannot be honoured: analysis is not optional.
+
+    If this ever stops decoding, the switch could be reinstated as a real
+    ablation -- and this test is what would say so.
+    """
+    from pathlib import Path as _Path
+
+    from tipguard.benchmark.io import load_cases
+
+    guard = build_guardrail(
+        DefenseConfig(
+            name="tip_guard",
+            params={"classifier_model": "mock-judge", "enable_llm_canonicalizer": "false"},
+        ),
+        registry,
+        "mock-main",
+        policies,
+    )
+    assert isinstance(guard, TIPGuard)
+    case = next(
+        c
+        for c in load_cases(_Path("data/generated/tipguard-v1.jsonl"))
+        if c.transformation == "code"
+    )
+    canonical = guard._canonicalizer.run(case.prompt)
+    assert any(view.source == "deterministic:code" for view in canonical.views), (
+        "no code view produced; code analysis may have become optional"
+    )
