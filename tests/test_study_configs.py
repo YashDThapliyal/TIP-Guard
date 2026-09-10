@@ -103,52 +103,44 @@ def _built(stem: str) -> Any:
 CANON_SWITCHES = ("enable_decoders", "enable_llm_canonicalizer")
 
 
-@pytest.mark.parametrize("condition", ["context", "forbidden"])
-def test_the_ablation_pair_agrees_on_everything_but_the_defense(condition: str) -> None:
-    """Same dataset, model, splits, seed and system-prompt condition.
-
-    Comparing only `defense.params` would miss an ablated arm pointed at a
-    different main model, which is not an ablation of canonicalization at all.
-    """
-    analysis = _load_analysis_module()
-    full_name, ablated_name = analysis.CANON_ABLATION
-    full = load_yaml_model(STUDY / f"{full_name}-{condition}.yaml", ExperimentConfig)
-    ablated = load_yaml_model(STUDY / f"{ablated_name}-{condition}.yaml", ExperimentConfig)
-    for field in ("dataset", "main_model", "splits", "seed", "system_prompt", "policies_config"):
-        assert getattr(full, field) == getattr(ablated, field), (
-            f"{condition}: the ablation pair differs in {field}"
-        )
-    assert full.defense.name == ablated.defense.name
+#: The only things the ablation pair may differ in: each arm's own name, and
+#: the two switches being ablated. Everything else in the config must match.
+#:
+#: Stated as what may differ rather than as a list of what must match, so a
+#: field added to `ExperimentConfig` later is covered by default instead of
+#: silently escaping the invariant. An enumerate-what-matches version of this
+#: check missed `limit` and `models_config` -- and a `limit` on one arm alone
+#: would have compared two different sample sizes.
+CANON_MAY_DIFFER = ("name",)
 
 
-@pytest.mark.parametrize("condition", ["context", "forbidden"])
-def test_the_ablation_pair_differs_only_in_canonicalization(condition: str) -> None:
-    """Every defence param except the two canonicalization switches matches,
-    and the switches are on in the full arm and off in the ablated one.
-
-    The full arm is checked for *both* switches. An earlier version of this
-    test checked only `enable_decoders`, which would have let a full arm with
-    the LLM canonicalizer already disabled pass as the "with canonicalization"
-    half of the pair.
-    """
-    analysis = _load_analysis_module()
-    full_name, ablated_name = analysis.CANON_ABLATION
-    full = _params(f"{full_name}-{condition}")
-    ablated = _params(f"{ablated_name}-{condition}")
-
-    switches = set(CANON_SWITCHES)
-    assert {k: v for k, v in full.items() if k not in switches} == {
-        k: v for k, v in ablated.items() if k not in switches
-    }, f"{condition}: the pair differs outside the canonicalization switches"
-
+def _comparable_config(stem: str) -> dict[str, Any]:
+    """An arm's full config, with only the permitted differences removed."""
+    config = load_yaml_model(STUDY / f"{stem}.yaml", ExperimentConfig)
+    dumped: dict[str, Any] = config.model_dump(mode="json")
+    for field in CANON_MAY_DIFFER:
+        dumped.pop(field, None)
+    params = dict(dumped["defense"].get("params") or {})
     for switch in CANON_SWITCHES:
-        assert str(ablated.get(switch)).lower() == "false", (
-            f"{condition}: {switch} is not disabled in the ablated arm"
-        )
-        # Absent means the default, which is on.
-        assert switch not in full or str(full[switch]).lower() == "true", (
-            f"{condition}: {switch} is not enabled in the full arm"
-        )
+        params.pop(switch, None)
+    dumped["defense"] = {**dumped["defense"], "params": params}
+    return dumped
+
+
+@pytest.mark.parametrize("condition", ["context", "forbidden"])
+def test_the_ablation_pair_agrees_on_everything_but_the_switches(condition: str) -> None:
+    """Exhaustive: every config field except the arm name and the two
+    canonicalization switches must be identical.
+
+    An earlier version listed the fields it compared, and so never noticed
+    `limit` or `models_config`. A `limit` set on one arm alone would have run
+    the pair over different numbers of cases while this test passed.
+    """
+    analysis = _load_analysis_module()
+    full_name, ablated_name = analysis.CANON_ABLATION
+    assert _comparable_config(f"{full_name}-{condition}") == _comparable_config(
+        f"{ablated_name}-{condition}"
+    ), f"{condition}: the ablation pair differs outside the canonicalization switches"
 
 
 @pytest.mark.parametrize("condition", ["context", "forbidden"])
@@ -185,6 +177,8 @@ def test_the_ablation_pair_builds_pipelines_that_differ_only_in_canonicalization
     assert (full._gate.input_classifier is None) == (ablated._gate.input_classifier is None)
     assert (full._gate.output_guard is None) == (ablated._gate.output_guard is None)
     assert full._system_prompt == ablated._system_prompt
+    assert full._main_model.name == ablated._main_model.name
+    assert full._clarify_text == ablated._clarify_text
     for left, right in (
         (full._gate.input_classifier, ablated._gate.input_classifier),
         (full._gate.canonical_classifier, ablated._gate.canonical_classifier),
@@ -193,6 +187,18 @@ def test_the_ablation_pair_builds_pipelines_that_differ_only_in_canonicalization
             continue
         assert left.prompt_version == right.prompt_version
         assert left.provider.name == right.provider.name
+
+    # The output guard is a whole stage of its own: a differing threshold,
+    # leak check or classifier there would be attributed to canonicalization
+    # just as readily as anything upstream.
+    full_out, ablated_out = full._gate.output_guard, ablated._gate.output_guard
+    if full_out is not None and ablated_out is not None:
+        assert full_out._threshold == ablated_out._threshold
+        assert full_out._leak_check == ablated_out._leak_check
+        assert (full_out._classifier is None) == (ablated_out._classifier is None)
+        if full_out._classifier is not None and ablated_out._classifier is not None:
+            assert full_out._classifier.prompt_version == ablated_out._classifier.prompt_version
+            assert full_out._classifier.provider.name == ablated_out._classifier.provider.name
 
 
 def test_every_compared_pair_screens_with_the_same_prompt() -> None:
