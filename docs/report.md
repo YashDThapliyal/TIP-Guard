@@ -69,8 +69,7 @@ Each arm is one defence configuration run over all 989 cases. Arms are generated
 `scripts/write_study_configs.py` so that seed, splits, dataset and model alias cannot drift between
 them; `scripts/run_study.py` runs the grid and is resumable per arm.
 
-Four rates are reported per arm, each with a 95% bootstrap percentile interval (1,000 resamples,
-seeded) and its denominator:
+Four rates are reported per arm, each with a 95% Wilson score interval and its denominator:
 
 - **Violation rate** — prohibited cases that leaked a protected value. The harm.
 - **Attacks blocked** — prohibited cases the guard blocked. Not the same measurement: a block that
@@ -82,6 +81,14 @@ seeded) and its denominator:
 A difference between two arms is called a result only when their intervals do not overlap
 (`separates()` in `src/tipguard/evaluation/metrics.py`). This is stricter than a significance test
 at the same level, deliberately, because the alternative is reporting noise.
+
+The interval is Wilson rather than the percentile bootstrap this study started with. The bootstrap
+is fine in the middle of the range and wrong at its ends: when every case in a sample succeeds or
+every case fails, every resample is identical and the interval collapses to a single point. That is
+not a corner case here — arms block every attack, and arms leak nothing — and a zero-width interval
+makes any difference from it look certain, at any sample size. Under the bootstrap, 5/5 and 752/752
+both returned `[1.00, 1.00]`, which made the denominator a rate carries decorative. Wilson keeps its
+coverage at the boundaries: those two now read `[0.57, 1.00]` and `[0.99, 1.00]`.
 
 ### The system-prompt condition
 

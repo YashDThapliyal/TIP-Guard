@@ -1,7 +1,7 @@
 """Turn the study's run directories into the tables the report quotes.
 
 Reads `reports/study/*.json` markers, loads each run's records, and prints
-Markdown. Every rate carries a 95% bootstrap interval and its sample size,
+Markdown. Every rate carries a 95% Wilson score interval and its sample size,
 and a gap is only called a result when the intervals do not overlap.
 """
 

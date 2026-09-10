@@ -11,9 +11,46 @@ from pathlib import Path
 
 from tipguard.config.loader import load_yaml_model
 from tipguard.config.schemas import ExperimentConfig
+from tipguard.evaluation.run_dir import RUN_COMPLETE_MARKER
 from tipguard.evaluation.runner import run_experiment
+from tipguard.run_id import config_hash
 
 OUT = Path("reports/study")
+
+
+def _marker_is_current(marker: Path, config: ExperimentConfig) -> tuple[bool, str]:
+    """Whether an arm's marker still describes a finished run of *this* config.
+
+    A marker is only a note that an arm was run once. Skipping on its mere
+    existence is wrong three ways: the config may have changed since (this
+    study edited `tip_guard`'s params mid-sweep), the run directory it points
+    at may have been deleted, and that directory may hold a crashed run that
+    never wrote its results. Any of those leaves `analyse_study.py` quietly
+    reading stale numbers, or omitting the arm, while the driver reports
+    success -- the failure mode that corrupts a comparison without ever
+    looking like an error.
+    """
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"marker unreadable ({type(exc).__name__})"
+    run_dir = Path(payload.get("run_dir", ""))
+    if not run_dir.is_dir():
+        return False, "run directory is gone"
+    if not (run_dir / RUN_COMPLETE_MARKER).exists():
+        return False, "run never completed"
+    if not (run_dir / "results.jsonl").exists():
+        return False, "run has no results"
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        return False, "run has no manifest"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"manifest unreadable ({type(exc).__name__})"
+    if manifest.get("config_hash") != config_hash(config):
+        return False, "config changed since the run"
+    return True, ""
 
 
 def main() -> int:
@@ -25,13 +62,23 @@ def main() -> int:
     print(f"{len(configs)} configurations", flush=True)
     failed: list[str] = []
     for index, path in enumerate(configs, 1):
-        config = load_yaml_model(path, ExperimentConfig)
         marker = OUT / f"{path.stem}.json"
-        if marker.exists():
-            print(f"[{index}/{len(configs)}] {path.stem}: already done", flush=True)
-            continue
         started = time.time()
         try:
+            # Loading is inside the guard: a malformed or invalid YAML used to
+            # raise before the per-arm `try` and abort the whole sweep, which
+            # is exactly the salvage behaviour the rest of this loop provides.
+            config = load_yaml_model(path, ExperimentConfig)
+            if marker.exists():
+                current, reason = _marker_is_current(marker, config)
+                if current:
+                    print(f"[{index}/{len(configs)}] {path.stem}: already done", flush=True)
+                    continue
+                print(
+                    f"[{index}/{len(configs)}] {path.stem}: re-running ({reason})",
+                    flush=True,
+                )
+                marker.unlink()
             artifacts = run_experiment(config, path)
         except Exception as exc:
             print(

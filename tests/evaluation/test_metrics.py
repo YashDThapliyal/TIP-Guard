@@ -6,9 +6,9 @@ from tipguard.benchmark.schema import CaseType, Decision, Split
 from tipguard.evaluation.metrics import (
     CONFIDENCE,
     Rate,
-    bootstrap_rate,
     compute_metrics,
     separates,
+    wilson_rate,
 )
 from tipguard.evaluation.summary import CaseRecord
 
@@ -46,7 +46,7 @@ def _record(
 def test_a_rate_carries_its_denominator() -> None:
     # A rate without its sample size cannot be read: 1.00 on four cases and
     # 1.00 on four hundred are different claims.
-    rate = bootstrap_rate([True] * 4)
+    rate = wilson_rate([True] * 4)
     assert rate.value == 1.0
     assert rate.n == 4
     assert "n=4" in rate.format()
@@ -54,34 +54,73 @@ def test_a_rate_carries_its_denominator() -> None:
 
 def test_the_interval_contains_the_point_estimate() -> None:
     for successes in ([True] * 30 + [False] * 70, [True] * 5 + [False] * 95):
-        rate = bootstrap_rate(successes)
+        rate = wilson_rate(successes)
         assert rate.low <= rate.value <= rate.high
 
 
 def test_a_smaller_sample_gives_a_wider_interval() -> None:
     # The property that makes the interval worth reporting at all.
-    small = bootstrap_rate([True] * 5 + [False] * 5)
-    large = bootstrap_rate([True] * 250 + [False] * 250)
+    small = wilson_rate([True] * 5 + [False] * 5)
+    large = wilson_rate([True] * 250 + [False] * 250)
     assert small.width > large.width
 
 
 def test_intervals_are_reproducible() -> None:
-    # A report is checkable only if a rerun gives the same bounds.
+    # A report is checkable only if a rerun gives the same bounds. The Wilson
+    # interval is a closed form, so this holds without a seed -- which the
+    # bootstrap it replaced needed.
     sample = [True] * 40 + [False] * 60
-    assert bootstrap_rate(sample, seed=7) == bootstrap_rate(sample, seed=7)
+    assert wilson_rate(sample) == wilson_rate(sample)
 
 
 def test_an_empty_sample_does_not_raise() -> None:
     # A breakdown cell with no cases is a fact about the split, not an error.
-    rate = bootstrap_rate([])
+    rate = wilson_rate([])
     assert rate.n == 0
     assert (rate.low, rate.high) == (0.0, 1.0)
 
 
 def test_a_unanimous_sample_has_a_tight_interval() -> None:
-    rate = bootstrap_rate([True] * 200)
+    rate = wilson_rate([True] * 200)
     assert rate.value == 1.0
     assert rate.low > 0.98
+    # Tight, but never a point: see the test below for why.
+    assert rate.width > 0.0
+
+
+def test_a_unanimous_sample_still_has_width() -> None:
+    """The defect this interval was changed to fix.
+
+    With a percentile bootstrap, every resample of an all-true sample is
+    itself all-true, so the interval collapsed to exactly [1, 1]. Boundary
+    rates are not hypothetical here -- arms block every attack, or leak
+    nothing -- and a zero-width interval makes `separates()` report any
+    difference from it as certain, however small the sample.
+    """
+    for sample in ([True] * 752, [False] * 752, [True] * 5, [False] * 5):
+        assert wilson_rate(sample).width > 0.0
+
+
+def test_a_unanimous_sample_is_not_the_same_claim_at_every_size() -> None:
+    """5/5 and 752/752 are both 1.00, and they are not the same evidence.
+
+    Under the bootstrap both returned [1.00, 1.00], which made the `n` a
+    rate carries decorative -- the one thing `Rate` exists to prevent.
+    """
+    small = wilson_rate([True] * 5)
+    large = wilson_rate([True] * 752)
+    assert small.value == large.value == 1.0
+    assert small.low < 0.7
+    assert large.low > 0.99
+    assert small.width > large.width
+
+
+def test_bounds_stay_inside_the_unit_interval() -> None:
+    # A bound outside [0, 1] would print as a rate that cannot occur.
+    for size in (1, 2, 5, 40, 752):
+        for sample in ([True] * size, [False] * size):
+            rate = wilson_rate(sample)
+            assert 0.0 <= rate.low <= rate.value <= rate.high <= 1.0
 
 
 @pytest.mark.parametrize("confidence", [CONFIDENCE])
@@ -150,16 +189,16 @@ def test_a_block_everything_defence_looks_perfect_and_useless() -> None:
 
 
 def test_separation_requires_non_overlapping_intervals() -> None:
-    clear_low = bootstrap_rate([True] * 5 + [False] * 195)
-    clear_high = bootstrap_rate([True] * 195 + [False] * 5)
+    clear_low = wilson_rate([True] * 5 + [False] * 195)
+    clear_high = wilson_rate([True] * 195 + [False] * 5)
     assert separates(clear_low, clear_high)
 
 
 def test_a_small_gap_on_a_small_sample_does_not_separate() -> None:
     # The guard against reporting noise: two rates a few points apart on a
     # handful of cases are not a finding.
-    first = bootstrap_rate([True] * 5 + [False] * 5)
-    second = bootstrap_rate([True] * 6 + [False] * 4)
+    first = wilson_rate([True] * 5 + [False] * 5)
+    second = wilson_rate([True] * 6 + [False] * 4)
     assert not separates(first, second)
 
 
