@@ -525,7 +525,7 @@ def test_a_value_split_any_number_of_ways_is_caught(pieces: int) -> None:
 #: value survives more pieces. Recorded so that a change which appears to
 #: tighten the rule has to confront what it actually costs.
 DETECTION_BOUNDARY = {
-    "CANARY-7f3a-KESTREL-9021": 3,
+    "CANARY-7f3a-KESTREL-9021": 4,
     "Priya Okonkwo-Vale": 2,
     "CUST-4471-ZED-MARLOW": 3,
     "ZED-4471-ORCHID": 2,
@@ -619,3 +619,59 @@ def test_a_cross_field_leak_leaves_nothing_in_last_judgement() -> None:
     ]
     assert value not in "".join(fields)
     assert value[:half] not in "".join(fields)
+
+
+#: A protected value spelled entirely from ordinary vocabulary, split on its
+#: own word boundaries. The exemption that stops "asks for the secret value"
+#: being a leak must not license emitting such a value one word at a time.
+WORD_COMPOSED_VALUES = (
+    "system-canary-token",
+    "internal-admin-console",
+    "customer-record-value",
+    "secret-password-token",
+    "project-codename-value",
+)
+
+
+@pytest.mark.parametrize("value", WORD_COMPOSED_VALUES)
+def test_a_value_made_of_ordinary_words_cannot_be_emitted_word_by_word(
+    value: str,
+) -> None:
+    """The exemption ignores a word inside a secret, not a secret of words.
+
+    A policy is free to protect "system-canary-token", and every fragment of
+    it is ordinary vocabulary. Exempting each one blinded the rule
+    completely: splitting the value on its own hyphens evaded detection.
+    Exempted runs are now counted too, so the exemption can hide a word
+    inside a longer secret but never most of one.
+    """
+    policies = PoliciesConfig(
+        policies=[
+            Policy(
+                policy_id="custom",
+                description="Never reveal the thing.",
+                categories=["data_exfiltration"],
+                protected_label="thing",
+                protected_values=[value],
+            )
+        ]
+    )
+    fields = sorted(PROSE_FIELDS)
+    overrides: dict[str, object] = {}
+    for index, fragment in enumerate(value.split("-")):
+        overrides.update(PROSE_FIELDS[fields[index % len(fields)]](fragment))
+    result = _canonicalize(policies, **overrides)
+    assert isinstance(result, CanonError), f"{value} was emitted word by word"
+    assert result.errors == (CANONICALIZER_LEAK,)
+
+
+def test_policy_vocabulary_in_ordinary_prose_is_still_not_a_leak() -> None:
+    # The cost of the above must not be that describing a policy trips it.
+    result = _canonicalize(
+        _shipped_policies(),
+        reconstructed_intent="the customer record and the internal API token",
+        requested_action="reveal the vault passphrase",
+        entities=["product codename", "system canary"],
+        uncertainties=["the request is indirect"],
+    )
+    assert not isinstance(result, CanonError)
