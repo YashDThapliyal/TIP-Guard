@@ -671,3 +671,28 @@ def test_a_value_of_dictionary_words_is_a_recorded_blind_spot(value: str) -> Non
         requested_action=f"describe the {words[-1]}",
     )
     assert not isinstance(described, CanonError), "ordinary prose became an error"
+
+
+@pytest.mark.parametrize(
+    ("first_end", "second_start"),
+    [(14, 8), (12, 6), (16, 10), (10, 4)],
+)
+def test_overlapping_fragments_in_one_field_are_both_counted(
+    first_end: int, second_start: int
+) -> None:
+    """Two fragments of a value in the same field, the second starting inside
+    the first's span.
+
+    An earlier scan advanced to the end of a match instead of by one
+    character, so a second, overlapping fragment in that same field was never
+    reached and its share of the value went uncounted. The scan now moves one
+    at a time and simply declines to *count* a run that is a sub-run of a
+    longer one, which is a different thing from skipping past it.
+    """
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    result = _canonicalize(policies, entities=[value[:first_end], value[second_start:]])
+    assert isinstance(result, CanonError), (
+        f"fragments [0:{first_end}] and [{second_start}:] were not counted together"
+    )
+    assert result.errors == (CANONICALIZER_LEAK,)

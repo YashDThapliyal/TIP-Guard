@@ -367,14 +367,16 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
                 # fragment marks off its whole length rather than a window.
                 while end <= len(target) and target[start:end] in haystack:
                     end += 1
-                # Advance past a matched run rather than by one character.
-                # Restarting one along produced sub-runs of a maximal match --
-                # "ystemcanary" from "systemcanary" -- which are not whole
-                # words, so the vocabulary exemption never recognised them and
-                # benign prose describing a policy read as a leak.
-                matched = end > start + MIN_FRAGMENT
-                matched_to = end - 1 if matched else start + 1
-                if matched:
+                # Only a run that cannot be extended leftwards is counted.
+                # A sub-run of a longer match -- "ystemcanary" inside
+                # "systemcanary" -- is not a whole word, so the vocabulary
+                # exemption never recognised it and benign prose describing a
+                # policy read as a leak. Skipping such a run is not the same
+                # as skipping *past* it: advancing to the end of a match lost
+                # a second, overlapping fragment in the same field, so the
+                # scan still moves one character at a time.
+                maximal = start == 0 or target[start - 1 : end - 1] not in haystack
+                if end > start + MIN_FRAGMENT and maximal:
                     fragment = target[start : end - 1]
                     span = b"\x01" * (end - 1 - start)
                     # An ordinary-vocabulary run is recorded separately
@@ -382,7 +384,7 @@ def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str,
                     # stays visible to anyone reading this.
                     target_span = exempt if _is_incidental(fragment, len(target)) else covered
                     target_span[start : end - 1] = span
-                start = matched_to
+                start += 1
         if sum(covered) > len(target) * MAX_VALUE_COVERAGE:
             return True
         del exempt
