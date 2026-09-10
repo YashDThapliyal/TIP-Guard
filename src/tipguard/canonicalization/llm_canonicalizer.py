@@ -32,6 +32,7 @@ distinction `PARSER_FAILURE_CATEGORY` exists to preserve for the risk
 classifier.
 """
 
+from collections.abc import Sequence
 from typing import Annotated
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator
@@ -85,8 +86,14 @@ class CanonJudgement(FrozenModel):
 
     contains_transformation: bool
     transformation: str | None = None
-    reconstructed_intent: str
-    requested_action: str
+    # Non-empty, like `policy_categories`. A model that answers with a blank
+    # intent has not read the prompt, and an empty string is indistinguishable
+    # downstream from a confident "this asks for nothing" -- Task 7 would
+    # police the blank while the real decoded task sat unused in `views`.
+    # Treated as a parser failure, which is what "could not answer" already
+    # means everywhere else in this project.
+    reconstructed_intent: Annotated[str, Field(min_length=1)]
+    requested_action: Annotated[str, Field(min_length=1)]
     entities: list[str] = Field(default_factory=list)
     policy_categories: Annotated[list[str], Field(min_length=1)]
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
@@ -154,6 +161,20 @@ def _literal_summary(judgement: CanonJudgement) -> str:
     return "The prompt's literal content appears to carry some transformation."
 
 
+#: Separator used to redact a list as one string. A protected value cannot
+#: contain a newline, so a value spanning two items is still found, and no
+#: item boundary is lost when the result is split back.
+_ITEM_SEPARATOR = "\n"
+
+
+def _redact_items(items: Sequence[str], protected_values: tuple[str, ...]) -> list[str]:
+    """`items` redacted jointly, so a value split across two is still caught."""
+    if not items:
+        return []
+    redacted = redact(_ITEM_SEPARATOR.join(items), protected_values)
+    return redacted.split(_ITEM_SEPARATOR)
+
+
 def _redact_judgement(
     judgement: CanonJudgement, protected_values: tuple[str, ...]
 ) -> CanonJudgement:
@@ -176,10 +197,14 @@ def _redact_judgement(
             ),
             "reconstructed_intent": redact(judgement.reconstructed_intent, protected_values),
             "requested_action": redact(judgement.requested_action, protected_values),
-            "entities": [redact(entity, protected_values) for entity in judgement.entities],
-            "uncertainties": [
-                redact(uncertainty, protected_values) for uncertainty in judgement.uncertainties
-            ],
+            # Redacted as a joined whole and then split back, not item by
+            # item. A value broken across two list entries matches neither on
+            # its own and reassembles wherever the list is joined -- in a
+            # view's text, or in the merged `uncertainties` a caller reports.
+            # The separator is one a protected value cannot contain, so
+            # splitting back cannot merge two entries that were distinct.
+            "entities": _redact_items(judgement.entities, protected_values),
+            "uncertainties": _redact_items(judgement.uncertainties, protected_values),
         }
     )
 
@@ -297,7 +322,20 @@ class LLMCanonicalizer:
     def _finish(self, judgement: CanonJudgement) -> tuple[CanonicalView, ...] | CanonError:
         redacted_judgement = _redact_judgement(judgement, self._protected_values)
         self.last_judgement = redacted_judgement
+        # Redacted again after assembly, not only per field. A view's text is
+        # built by joining several fields, and a value split across two of
+        # them -- entities ["CANARY-7f3a-", "KESTREL-9021"] -- matches
+        # neither on its own and reassembles in the join. The project's own
+        # `detect_leak` called that a leak while this returned it clean and
+        # unflagged, which is the one outcome the redaction exists to
+        # prevent. Redacting what is actually returned closes the whole class
+        # rather than the two fields that happened to be noticed.
         views = _views_from(redacted_judgement)
-        if redacted_judgement != judgement:
-            return CanonError(views=views, errors=(CANONICALIZER_LEAK,))
-        return views
+        redacted_views = tuple(
+            view.model_copy(update={"text": redact(view.text, self._protected_values)})
+            for view in views
+        )
+        leaked = redacted_judgement != judgement or redacted_views != views
+        if leaked:
+            return CanonError(views=redacted_views, errors=(CANONICALIZER_LEAK,))
+        return redacted_views

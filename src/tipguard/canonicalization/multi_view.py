@@ -33,6 +33,26 @@ NO_LLM_VIEW = "no_llm_view"
 NO_DECODED_VIEW = "no_decoded_view"
 
 
+#: The category a model names when it judges a prompt free of policy risk.
+#: Dropped from the merged result rather than passed through, because a
+#: caller testing `if canon.policy_categories:` would read ("none",) as "some
+#: category applies" -- the opposite of what the model said, and the same
+#: shape the no-LLM path already reports as empty.
+NO_CATEGORY = "none"
+
+
+def _policy_categories(judgement: "CanonJudgement | None") -> tuple[str, ...]:
+    """The policy categories the model named, with its no-risk marker removed.
+
+    Emptiness therefore means "no category applies" from either path, so a
+    caller cannot read the LLM's considered "none" and the absence of an LLM
+    as opposite things.
+    """
+    if judgement is None:
+        return ()
+    return tuple(c for c in judgement.policy_categories if c != NO_CATEGORY)
+
+
 def _weight_for(source: str) -> float:
     prefix = source.split(":", 1)[0]
     return _SOURCE_WEIGHT.get(prefix, 0.0)
@@ -93,7 +113,7 @@ class MultiViewCanonicalizer:
         confidence = max(
             (view.confidence * _weight_for(view.source) for view in views), default=0.0
         )
-        policy_categories = tuple(llm_judgement.policy_categories) if llm_judgement else ()
+        policy_categories = _policy_categories(llm_judgement)
         contains_transformation = detection.has_transformation or (
             llm_judgement.contains_transformation if llm_judgement is not None else False
         )

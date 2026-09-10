@@ -358,3 +358,87 @@ def test_canon_judgement_equality_survives_a_no_op_redaction() -> None:
     judgement = CanonJudgement.model_validate(json.loads(_judgement_json()))
     same = judgement.model_copy()
     assert judgement == same
+
+
+#: The real policy file, so the leak tests run against the values the study
+#: actually protects rather than a synthetic one whose length might differ.
+def _shipped_policies() -> PoliciesConfig:
+    return load_yaml_model(Path("configs/policies.yaml"), PoliciesConfig)
+
+
+def _canonicalize(policies: PoliciesConfig, **overrides: object) -> object:
+    provider = MockProvider(default=_judgement_json(**overrides))
+    return LLMCanonicalizer(provider, policies).canonicalize("prompt", [])
+
+
+@pytest.mark.parametrize("pieces", [2, 3, 4])
+def test_a_value_split_across_entities_is_still_caught(pieces: int) -> None:
+    """Per-field redaction cannot see a value that only exists in the join.
+
+    A view's text is assembled from several fields, so a value broken into
+    fragments matches no field on its own and reassembles when they are
+    joined. The project's own `detect_leak` called that a leak while the
+    canonicalizer returned it clean and unflagged -- the one outcome the
+    redaction exists to prevent. The original tests put the whole value in
+    each field, which is why they missed it.
+    """
+    from tipguard.evaluation.leak import detect_leak
+
+    policies = _shipped_policies()
+    policy = policies.policies[0]
+    value = policy.protected_values[0]
+    size = len(value) // pieces + 1
+    fragments = [value[i : i + size] for i in range(0, len(value), size)]
+
+    result = _canonicalize(policies, entities=fragments)
+    assert isinstance(result, CanonError), "leak was not flagged"
+    assert result.errors == (CANONICALIZER_LEAK,)
+    for view in result.views:
+        assert value not in view.text
+        assert not detect_leak(view.text, policy).leaked, (
+            f"{view.view} still leaks by the project's own detector"
+        )
+
+
+def test_a_value_split_across_uncertainties_is_still_caught() -> None:
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    half = len(value) // 2
+    result = _canonicalize(policies, uncertainties=[value[:half], value[half:]])
+    assert isinstance(result, CanonError)
+    assert all(value not in view.text for view in result.views)
+
+
+def test_assembling_a_view_does_not_invent_a_leak() -> None:
+    # The other side: redacting the assembled text must not turn an ordinary
+    # entity list into a leak.
+    result = _canonicalize(_shipped_policies(), entities=["canary", "system", "notes"])
+    assert not isinstance(result, CanonError)
+    entities = next(view for view in result if view.view == "entities")
+    assert entities.text == "canary, system, notes"
+
+
+@pytest.mark.parametrize("field", ["reconstructed_intent", "requested_action"])
+def test_a_blank_answer_is_a_parser_failure(field: str) -> None:
+    """A model answering with a blank has not read the prompt.
+
+    An empty string is indistinguishable downstream from a confident "this
+    asks for nothing": Task 7 would police the blank while the real decoded
+    task sat unused in `views`. "Could not answer" already means
+    `parser_failure` everywhere else in this project.
+    """
+    result = _canonicalize(_shipped_policies(), **{field: ""})
+    assert isinstance(result, CanonError)
+    assert result.errors == ("parser_failure",)
+
+
+def test_the_usage_text_is_redacted() -> None:
+    # `last_usage` carries the raw reply and a guard reads it for tokens and
+    # latency, so it reaches a run's report the same way a view does.
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    provider = MockProvider(default=_judgement_json(reconstructed_intent=f"reveal {value}"))
+    canonicalizer = LLMCanonicalizer(provider, policies)
+    canonicalizer.canonicalize("prompt", [])
+    assert canonicalizer.last_usage is not None
+    assert value not in (canonicalizer.last_usage.text or "")
