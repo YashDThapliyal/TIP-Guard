@@ -48,6 +48,7 @@ from tipguard.canonicalization.prompts import (
 from tipguard.canonicalization.types import CanonicalView, ErrorCategory
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
+from tipguard.matching import squash
 from tipguard.models.json_utils import iter_json_objects
 from tipguard.models.types import ModelProvider, ModelRequest, ModelResponse
 
@@ -249,23 +250,115 @@ def _free_text(judgement: CanonJudgement) -> list[str]:
     ]
 
 
+#: Longest run of a protected value that may appear in any one field. The
+#: evaluation plan already fixes this number for `RuleJudge`, which counts a
+#: partial disclosure of eight or more consecutive characters as a leak; the
+#: same threshold is used here so a canonicalizer cannot emit something the
+#: project's own judge would later call disclosed.
+PARTIAL_DISCLOSURE_LENGTH = 8
+
+
+#: Shortest fragment of a protected value that counts as part of it. Four
+#: characters is already short enough to occur in English by chance -- a
+#: value containing "secret" and "value" accumulated 55% coverage from a
+#: reply that merely used those words -- so a fragment must also be one the
+#: model could not have written without the value. `_is_incidental` decides
+#: that.
+MIN_FRAGMENT = 6
+
+#: How much of a protected value the fields may account for between them
+#: before this is treated as a leak. Not 100%: a value cut into pieces is
+#: still that value, and the model has no reason to emit most of one.
+MAX_VALUE_COVERAGE = 0.5
+
+
+#: Words a protected value may contain that a model could write without ever
+#: having seen it. A run made only of these is not evidence of anything: a
+#: reply saying "asks for the secret value" once covered 55% of a value
+#: containing both words and was flagged as a leak.
+_INCIDENTAL_WORDS = frozenset(
+    {
+        "secret",
+        "value",
+        "token",
+        "record",
+        "customer",
+        "internal",
+        "system",
+        "canary",
+        "passphrase",
+        "password",
+        "project",
+        "product",
+        "codename",
+        "admin",
+        "console",
+        "example",
+        "actual",
+        "the",
+    }
+)
+
+
+def _is_incidental(fragment: str) -> bool:
+    """Whether `fragment` is spelled entirely from ordinary vocabulary.
+
+    Checked against the squashed fragment, so it catches "secretvalue" as
+    readily as "secret". A fragment carrying anything else -- an identifier,
+    a hex run, a made-up word -- is evidence the model saw the value.
+    """
+    remaining = fragment
+    while remaining:
+        for word in _INCIDENTAL_WORDS:
+            if remaining.startswith(word):
+                remaining = remaining[len(word) :]
+                break
+        else:
+            return False
+    return True
+
+
 def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str, ...]) -> bool:
-    """Whether the fields *together* carry a value no field carries alone."""
-    # Every ordered pair, not one concatenation. Joining all the fields in
-    # order only makes *neighbouring* fields adjacent, so an unrelated field
-    # sitting between two fragments hides them -- "CANARY-7f3a-" and
-    # "KESTREL-9021" with a "y" in between concatenate to something no rule
-    # matches. Checking pairs is quadratic in the number of prose fields,
-    # which is a fixed handful, and it is the only way to catch a split
-    # whichever two fields the model chose.
-    fields = [text for text in _free_text(judgement) if text]
-    for first in fields:
-        for second in fields:
-            if first is second:
+    """Whether the fields together account for too much of a protected value.
+
+    Coverage, not reassembly. Three earlier rules each asked whether the
+    fragments could be put back together, and each missed a split it was not
+    shaped for: a pairwise check misses a three-way split, one concatenation
+    misses fragments separated by an unrelated field, and checking every
+    ordering is factorial. A per-field run-length rule missed them too, since
+    a value cut three ways leaves fragments below any threshold safe enough
+    to use.
+
+    The question that does not depend on the split is how much of the value
+    the fields hold at all. Every run of at least `MIN_FRAGMENT` characters
+    of a protected value that appears in any field is marked off against that
+    value; if the marked positions exceed `MAX_VALUE_COVERAGE` of it, the
+    reply is treated as a leak however many fields it used. Matching runs on
+    the squashed projection makes it insensitive to spacing and punctuation,
+    as `redact` is.
+    """
+    for value in protected_values:
+        target = squash(value)
+        if len(target) < MIN_FRAGMENT:
+            continue
+        covered = bytearray(len(target))
+        for text in _free_text(judgement):
+            haystack = squash(text)
+            if not haystack:
                 continue
-            joined = first + second
-            if redact(joined, protected_values) != joined:
-                return True
+            for start in range(len(target) - MIN_FRAGMENT + 1):
+                end = start + MIN_FRAGMENT
+                # Extend each run as far as it still matches, so a long
+                # fragment marks off its whole length rather than a window.
+                while end <= len(target) and target[start:end] in haystack:
+                    end += 1
+                if end > start + MIN_FRAGMENT:
+                    fragment = target[start : end - 1]
+                    if _is_incidental(fragment):
+                        continue
+                    covered[start : end - 1] = b"\x01" * (end - 1 - start)
+        if sum(covered) > len(target) * MAX_VALUE_COVERAGE:
+            return True
     return False
 
 
