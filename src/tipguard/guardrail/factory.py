@@ -4,6 +4,7 @@ from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import DefenseConfig, PoliciesConfig
 from tipguard.guardrail import baselines
 from tipguard.guardrail.no_defense import NoDefense
+from tipguard.guardrail.tip_guard_factory import build_tip_guard
 from tipguard.guardrail.types import Guardrail, build_system_prompt
 from tipguard.models.registry import ProviderRegistry
 
@@ -36,4 +37,6 @@ def build_guardrail(
         return baselines.input_output_classifier(
             params, registry, main_model, system_prompt, policies
         )
+    if defense.name == "tip_guard":
+        return build_tip_guard(params, registry, main_model, system_prompt, policies)
     raise ConfigError(f"unknown defense {defense.name!r}")
