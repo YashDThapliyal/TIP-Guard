@@ -94,6 +94,20 @@ class CanonJudgement(FrozenModel):
     # means everywhere else in this project.
     reconstructed_intent: Annotated[str, Field(min_length=1)]
     requested_action: Annotated[str, Field(min_length=1)]
+
+    @field_validator("reconstructed_intent", "requested_action")
+    @classmethod
+    def _must_say_something(cls, value: str) -> str:
+        """A whitespace-only answer is as blank as an empty one.
+
+        `min_length` alone accepted " " and "\n", which read downstream as a
+        confident judgement rather than an absent one -- the same failure the
+        length floor was added to prevent, one character wide.
+        """
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
     entities: list[str] = Field(default_factory=list)
     policy_categories: Annotated[list[str], Field(min_length=1)]
     confidence: Annotated[float, Field(ge=0.0, le=1.0)]
@@ -161,18 +175,33 @@ def _literal_summary(judgement: CanonJudgement) -> str:
     return "The prompt's literal content appears to carry some transformation."
 
 
-#: Separator used to redact a list as one string. A protected value cannot
-#: contain a newline, so a value spanning two items is still found, and no
-#: item boundary is lost when the result is split back.
-_ITEM_SEPARATOR = "\n"
+#: What replaces an item when a value spans several of them.
+PLACEHOLDER = "[REDACTED]"
 
 
 def _redact_items(items: Sequence[str], protected_values: tuple[str, ...]) -> list[str]:
-    """`items` redacted jointly, so a value split across two is still caught."""
+    """`items` redacted jointly, so a value split across two is still caught.
+
+    Joined for the leak check but rebuilt from the originals, never by
+    splitting the redacted string back. An earlier version split on a
+    newline, reasoning that a protected value cannot contain one -- true, and
+    beside the point, because an *item* can: a model returning
+    "alpha\nbeta" as one entity had it silently become two. Item boundaries
+    are structure the model chose and this must not invent or destroy them.
+
+    So the join is used only to decide whether the list leaks as a whole. If
+    it does, every item is replaced, because once a value spans two items
+    there is no way to say which part of which item was the secret -- and
+    guessing would leave a fragment behind, which is the failure this exists
+    to prevent.
+    """
     if not items:
         return []
-    redacted = redact(_ITEM_SEPARATOR.join(items), protected_values)
-    return redacted.split(_ITEM_SEPARATOR)
+    per_item = [redact(item, protected_values) for item in items]
+    joined = "\n".join(per_item)
+    if redact(joined, protected_values) != joined:
+        return [PLACEHOLDER for _ in items]
+    return per_item
 
 
 def _redact_judgement(

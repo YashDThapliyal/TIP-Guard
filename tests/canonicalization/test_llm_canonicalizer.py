@@ -419,7 +419,8 @@ def test_assembling_a_view_does_not_invent_a_leak() -> None:
 
 
 @pytest.mark.parametrize("field", ["reconstructed_intent", "requested_action"])
-def test_a_blank_answer_is_a_parser_failure(field: str) -> None:
+@pytest.mark.parametrize("blank", ["", " ", "\n", "\t", "   \n  "])
+def test_a_blank_answer_is_a_parser_failure(field: str, blank: str) -> None:
     """A model answering with a blank has not read the prompt.
 
     An empty string is indistinguishable downstream from a confident "this
@@ -427,7 +428,11 @@ def test_a_blank_answer_is_a_parser_failure(field: str) -> None:
     task sat unused in `views`. "Could not answer" already means
     `parser_failure` everywhere else in this project.
     """
-    result = _canonicalize(_shipped_policies(), **{field: ""})
+    # Whitespace-only counts: a length floor alone accepted " " and "\n",
+    # which read downstream as a confident judgement rather than an absent
+    # one -- the same failure the floor was added to prevent, one character
+    # wide.
+    result = _canonicalize(_shipped_policies(), **{field: blank})
     assert isinstance(result, CanonError)
     assert result.errors == ("parser_failure",)
 
@@ -442,3 +447,30 @@ def test_the_usage_text_is_redacted() -> None:
     canonicalizer.canonicalize("prompt", [])
     assert canonicalizer.last_usage is not None
     assert value not in (canonicalizer.last_usage.text or "")
+
+
+def test_redaction_never_changes_how_many_items_a_model_returned() -> None:
+    """Item boundaries are structure the model chose, not ours to edit.
+
+    An earlier fix joined the list on a newline and split the redacted string
+    back, reasoning that a protected value cannot contain one. True, and
+    beside the point: an *item* can, so a model returning "alpha\nbeta" as
+    one entity had it silently become two.
+    """
+    policies = _shipped_policies()
+    result = _canonicalize(policies, entities=["alpha\nbeta", "gamma"])
+    assert not isinstance(result, CanonError)
+    entities = next(view for view in result if view.view == "entities")
+    assert entities.text == "alpha\nbeta, gamma"
+
+
+def test_a_split_value_replaces_every_item_rather_than_guessing() -> None:
+    # Once a value spans two items there is no way to say which part of which
+    # item was the secret, and guessing would leave a fragment behind.
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    half = len(value) // 2
+    result = _canonicalize(policies, entities=[value[:half], value[half:], "unrelated"])
+    assert isinstance(result, CanonError)
+    entities = next(view for view in result.views if view.view == "entities")
+    assert entities.text == "[REDACTED], [REDACTED], [REDACTED]"
