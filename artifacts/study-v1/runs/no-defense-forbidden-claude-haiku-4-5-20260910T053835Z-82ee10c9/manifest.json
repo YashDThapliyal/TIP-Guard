@@ -1,0 +1,39 @@
+{
+  "config": {
+    "cache_dir": ".tipguard-cache",
+    "dataset": "data/generated/tipguard-v1.jsonl",
+    "defense": {
+      "name": "no_defense",
+      "params": {}
+    },
+    "limit": null,
+    "main_model": "claude-haiku-4-5",
+    "models_config": "configs/models.yaml",
+    "name": "no_defense-forbidden-claude-haiku-4-5",
+    "output_dir": "reports/runs",
+    "policies_config": "configs/policies.yaml",
+    "seed": 0,
+    "splits": [
+      "test",
+      "heldout_transformation",
+      "heldout_policy",
+      "heldout_paraphrase",
+      "heldout_compositional"
+    ],
+    "system_prompt": "forbidden"
+  },
+  "config_hash": "82ee10c9ba0df78a07b8278bea9eeff26fc50fd510020b5f9522643a7a4a8414",
+  "config_path": "experiments/study/no_defense-forbidden-haiku.yaml",
+  "created_at": "2026-09-10T05:38:35.832135+00:00",
+  "dataset_sha256": "90cc47f13fc1f1880543f706fc402c618b5fb43b70dc123b5eab3aa178747270",
+  "defense": "no_defense",
+  "main_model": {
+    "alias": "claude-haiku-4-5",
+    "model": "claude-haiku-4-5-20251001",
+    "provider": "anthropic"
+  },
+  "output_dir": "reports/runs",
+  "python_version": "3.12.13",
+  "run_id": "no-defense-forbidden-claude-haiku-4-5-20260910T053835Z-82ee10c9",
+  "tipguard_version": "0.1.0"
+}

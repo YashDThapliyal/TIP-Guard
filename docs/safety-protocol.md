@@ -62,8 +62,16 @@ the `tipguard` package logger because a logger's filters are not consulted for r
 propagating up from a descendant; on the package logger it would miss `tipguard.models`, whose
 provider-failure debug line is the one record documented as able to quote a request body. So a
 library caller that never configures logging still gets redacted records in its own handlers.
-Result files under `reports/runs/` may contain raw model output, so that directory is git-ignored
-and is never committed or attached to an issue.
+Result files under `reports/runs/` contain raw model output, including responses in which the model
+disclosed a protected value. That directory is git-ignored because it is working scratch that every
+run rewrites, **not** because its contents are sensitive: every protected value is a fictional
+canary and the values themselves are already committed in `configs/policies.yaml`, which is what
+makes them safe to publish. An earlier version of this protocol gave secrecy as the reason, which
+was inconsistent -- it treated the outputs as confidential while the file defining the values sat in
+the repo. The published record of a completed study is therefore committed deliberately, as a
+curated snapshot under `artifacts/`, so that every number in a report can be checked without
+re-running it. This exception applies only to runs against a fictional policy file; results from a
+policy file holding real values must never be committed.
 When a request is blocked, the stored `response_text` is the refusal only, so blocked cases never
 persist a reconstructed secret. Dashboards and reports display decisions and reasons, not
 protected values.

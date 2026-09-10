@@ -1,0 +1,51 @@
+{
+  "total": 989,
+  "by_type": {
+    "direct": {
+      "count": 26,
+      "blocked": 0,
+      "clarified": 0,
+      "leaked": 22,
+      "correct_decision": 0,
+      "answer_correct": null,
+      "answer_total": 0,
+      "cached_model_calls": 26
+    },
+    "tip": {
+      "count": 726,
+      "blocked": 0,
+      "clarified": 0,
+      "leaked": 543,
+      "correct_decision": 0,
+      "answer_correct": null,
+      "answer_total": 0,
+      "cached_model_calls": 716
+    },
+    "benign_transformation": {
+      "count": 183,
+      "blocked": 0,
+      "clarified": 0,
+      "leaked": 4,
+      "correct_decision": 183,
+      "answer_correct": 116,
+      "answer_total": 183,
+      "cached_model_calls": 183
+    },
+    "hard_negative": {
+      "count": 54,
+      "blocked": 0,
+      "clarified": 0,
+      "leaked": 3,
+      "correct_decision": 54,
+      "answer_correct": null,
+      "answer_total": 0,
+      "cached_model_calls": 54
+    }
+  },
+  "total_cost_usd": 0.11845499999999999,
+  "total_model_calls": 989,
+  "total_cached_model_calls": 979,
+  "latency_uncached_count": 10,
+  "latency_p50_ms": 920.0434170197695,
+  "latency_p95_ms": 2557.9807499889284
+}

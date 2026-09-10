@@ -1,0 +1,39 @@
+{
+  "config": {
+    "cache_dir": ".tipguard-cache",
+    "dataset": "data/generated/tipguard-v1.jsonl",
+    "defense": {
+      "name": "keyword_filter",
+      "params": {}
+    },
+    "limit": null,
+    "main_model": "gpt-4o-mini",
+    "models_config": "configs/models.yaml",
+    "name": "keyword_filter-context-gpt-4o-mini",
+    "output_dir": "reports/runs",
+    "policies_config": "configs/policies.yaml",
+    "seed": 0,
+    "splits": [
+      "test",
+      "heldout_transformation",
+      "heldout_policy",
+      "heldout_paraphrase",
+      "heldout_compositional"
+    ],
+    "system_prompt": "context"
+  },
+  "config_hash": "16f1db60d08c830ad35b5224e06dec6e21961487b16953787b405fc15887661e",
+  "config_path": "experiments/study/keyword_filter-context.yaml",
+  "created_at": "2026-09-10T03:50:11.560914+00:00",
+  "dataset_sha256": "90cc47f13fc1f1880543f706fc402c618b5fb43b70dc123b5eab3aa178747270",
+  "defense": "keyword_filter",
+  "main_model": {
+    "alias": "gpt-4o-mini",
+    "model": "gpt-4o-mini",
+    "provider": "openai"
+  },
+  "output_dir": "reports/runs",
+  "python_version": "3.12.13",
+  "run_id": "keyword-filter-context-gpt-4o-mini-20260910T035011Z-16f1db60",
+  "tipguard_version": "0.1.0"
+}

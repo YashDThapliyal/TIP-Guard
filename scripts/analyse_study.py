@@ -6,13 +6,18 @@ and a gap is only called a result when the intervals do not overlap.
 """
 
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 from tipguard.evaluation.metrics import DefenceMetrics, compute_metrics, separates
 from tipguard.evaluation.summary import CaseRecord
 
-STUDY = Path("reports/study")
+#: Where to read markers from. Defaults to the live scratch directory the
+#: driver writes; pass a directory to read a committed snapshot instead, e.g.
+#: `analyse_study.py artifacts/study-v1/markers`, which is what lets a reader
+#: regenerate every table in the report without re-running the study.
+STUDY = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("reports/study")
 
 #: The order arms appear in every table: cheapest first, so a reader sees
 #: what each added component bought over the one above it.
@@ -204,7 +209,10 @@ def main() -> int:
         print("\n## tip_guard, attacks blocked by family (context)\n")
         print(families)
     total = sum(m.cost_usd for m in metrics.values())
-    print(f"\nTotal spend across completed arms: ${total:.2f}")
+    print(
+        f"\nNotional cost of the completed arms: ${total:.2f} "
+        "(cost of every model call, cached or not -- i.e. what a cold reproduction pays)"
+    )
     return 0
 
 
