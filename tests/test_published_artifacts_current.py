@@ -443,9 +443,18 @@ _MONEY = re.compile(r"\$\s?(\d+(?:\.\d+)?)")
 #: this enforces is narrower than it sounds -- an amount tagged with a
 #: non-dollar currency fails -- and the honest statement of the limit belongs
 #: here rather than in a comment overstating the guarantee.
+#: `\u00a3\u20ac\u00a5` are the pound, euro and yen signs.
+_CURRENCY_SIGNS = "\u00a3\u20ac\u00a5"
+
 _NON_DOLLAR_MONEY = re.compile(
-    r"\b(\S+)\s+(?:dollars?|cents?|USD|pounds?|GBP|euros?|EUR|yen|JPY)\b|"
-    r"([\u00a3\u20ac\u00a5]\s?\d+(?:\.\d+)?)",
+    # A unit word after a number or word: "20 dollars", "twenty dollars".
+    r"\b(\S+)\s+(?:dollars?|cents?|USD|pounds?|GBP|euros?|EUR|yen|JPY)\b"
+    # A non-dollar sign before a number: "\u00a320".
+    rf"|([{_CURRENCY_SIGNS}]\s?\d+(?:\.\d+)?)"
+    # Any currency sign *after* a number: "20\u00a3", and "20$" too, which the
+    # dollar reader also misses because it requires the sign first. Both
+    # passed while this pattern only looked for a leading sign.
+    rf"|(\d+(?:\.\d+)?\s?[{_CURRENCY_SIGNS}$])",
     re.IGNORECASE,
 )
 
