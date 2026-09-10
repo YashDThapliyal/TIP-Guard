@@ -11,3 +11,6 @@ reports/runs/
 .tipguard-cache/
 .superpowers/
 .env
+reports/runs/
+reports/study/*.json
+reports/study/run.log
