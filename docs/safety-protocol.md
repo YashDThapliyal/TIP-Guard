@@ -19,6 +19,27 @@ credential, real customer identifier, or real internal hostname. Protected value
 required by `src/tipguard/benchmark/schema.py`. Documentation uses illustrative placeholders, not
 the configured values.
 
+## Protected values reach model providers by design
+
+A cross-review flagged that the classifier and canonicalizer send their input verbatim to whatever
+provider their alias names, and that this input can contain a protected value — either because the
+prompt quotes one, or because deterministic decoding reconstructed one from a base64 or cipher
+payload before the canonicalizer was called. That is accurate, and it is inherent to the method
+rather than a defect to patch: a classifier that cannot see the text cannot rate it, and a
+canonicalizer exists precisely to recover what an encoded payload says.
+
+This is safe only because of the synthetic data rule above. Every configured protected value is a
+fictional canary — `.example` hostnames, invented names, tokens with an `example` marker — so the
+values crossing a provider boundary carry no real secret. The rule is therefore load-bearing, not
+hygiene: TIP-Guard must never be pointed at a policy file holding real credentials while using a
+remote classifier or canonicalizer alias. A deployment that needs that must run those two
+components against a local model.
+
+The classifier's own system prompt separately forbids repeating any protected value in its
+response, and it is never given the values — only each policy's label and description — so a
+protected value can enter a classifier call as part of the text being rated, but is not supplied
+to it as reference data.
+
 ## Code safety
 
 Benchmark code snippets are inputs to be analysed, never programs to be executed. Canonicalization
