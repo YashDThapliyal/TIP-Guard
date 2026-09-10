@@ -238,6 +238,50 @@ def _redact_judgement(
     )
 
 
+def _free_text(judgement: CanonJudgement) -> list[str]:
+    """Every field a model fills with prose, in one list."""
+    return [
+        judgement.transformation or "",
+        judgement.reconstructed_intent,
+        judgement.requested_action,
+        *judgement.entities,
+        *judgement.uncertainties,
+    ]
+
+
+def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str, ...]) -> bool:
+    """Whether the fields *together* carry a value no field carries alone."""
+    # Every ordered pair, not one concatenation. Joining all the fields in
+    # order only makes *neighbouring* fields adjacent, so an unrelated field
+    # sitting between two fragments hides them -- "CANARY-7f3a-" and
+    # "KESTREL-9021" with a "y" in between concatenate to something no rule
+    # matches. Checking pairs is quadratic in the number of prose fields,
+    # which is a fixed handful, and it is the only way to catch a split
+    # whichever two fields the model chose.
+    fields = [text for text in _free_text(judgement) if text]
+    for first in fields:
+        for second in fields:
+            if first is second:
+                continue
+            joined = first + second
+            if redact(joined, protected_values) != joined:
+                return True
+    return False
+
+
+def _blank_free_text(judgement: CanonJudgement) -> CanonJudgement:
+    """`judgement` with every prose field replaced by the placeholder."""
+    return judgement.model_copy(
+        update={
+            "transformation": PLACEHOLDER if judgement.transformation else None,
+            "reconstructed_intent": PLACEHOLDER,
+            "requested_action": PLACEHOLDER,
+            "entities": [PLACEHOLDER for _ in judgement.entities],
+            "uncertainties": [PLACEHOLDER for _ in judgement.uncertainties],
+        }
+    )
+
+
 def _views_from(judgement: CanonJudgement) -> tuple[CanonicalView, ...]:
     source = f"llm:{PROMPT_VERSION}"
     confidence = judgement.confidence
@@ -350,6 +394,18 @@ class LLMCanonicalizer:
 
     def _finish(self, judgement: CanonJudgement) -> tuple[CanonicalView, ...] | CanonError:
         redacted_judgement = _redact_judgement(judgement, self._protected_values)
+        if _leaks_across_fields(redacted_judgement, self._protected_values):
+            # A value split across two *fields* -- half in the intent, half in
+            # the requested action -- matches neither on its own, exactly as a
+            # value split across two list items did. `last_judgement` holds
+            # every field together and is read by a guard, so the fragments
+            # sit side by side there for anyone who concatenates them.
+            # Nothing free-text survives: which half of which field held the
+            # secret is unanswerable, and a partial redaction leaves a
+            # fragment, which is the failure this exists to prevent.
+            redacted_judgement = _blank_free_text(redacted_judgement)
+            self.last_judgement = redacted_judgement
+            return CanonError(views=_views_from(redacted_judgement), errors=(CANONICALIZER_LEAK,))
         self.last_judgement = redacted_judgement
         # Redacted again after assembly, not only per field. A view's text is
         # built by joining several fields, and a value split across two of

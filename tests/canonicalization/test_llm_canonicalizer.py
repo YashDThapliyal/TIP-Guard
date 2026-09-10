@@ -474,3 +474,77 @@ def test_a_split_value_replaces_every_item_rather_than_guessing() -> None:
     assert isinstance(result, CanonError)
     entities = next(view for view in result.views if view.view == "entities")
     assert entities.text == "[REDACTED], [REDACTED], [REDACTED]"
+
+
+#: Every prose field a model fills, as the overrides that put text there.
+PROSE_FIELDS = {
+    "transformation": lambda text: {"transformation": text},
+    "reconstructed_intent": lambda text: {"reconstructed_intent": text},
+    "requested_action": lambda text: {"requested_action": text},
+    "entities": lambda text: {"entities": [text]},
+    "uncertainties": lambda text: {"uncertainties": [text]},
+}
+
+
+@pytest.mark.parametrize("first", sorted(PROSE_FIELDS))
+@pytest.mark.parametrize("second", sorted(PROSE_FIELDS))
+def test_a_value_split_across_any_two_fields_is_caught(first: str, second: str) -> None:
+    """Systematic, not by example: every ordered pair of prose fields.
+
+    Per-field redaction cannot see a value that exists only once two fields
+    are read together, and `last_judgement` holds them all side by side for a
+    guard. Checking one concatenation of the fields in order was not enough
+    either -- an unrelated field between two fragments hides them, so
+    "CANARY-7f3a-" and "KESTREL-9021" with a "y" between concatenated to
+    something no rule matched.
+    """
+    if first == second:
+        pytest.skip("a single field is covered by the per-field redaction")
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    half = len(value) // 2
+    overrides = {**PROSE_FIELDS[first](value[:half]), **PROSE_FIELDS[second](value[half:])}
+
+    result = _canonicalize(policies, **overrides)
+    assert isinstance(result, CanonError), f"{first} + {second} was not flagged"
+    assert result.errors == (CANONICALIZER_LEAK,)
+    assert all(value not in view.text for view in result.views)
+
+
+def test_ordinary_prose_across_fields_is_not_flagged() -> None:
+    # The other side: fields that merely sit next to each other must not
+    # produce a leak by accident, or every reply becomes an error.
+    result = _canonicalize(
+        _shipped_policies(),
+        reconstructed_intent="asks for a canary value",
+        requested_action="reveal the system canary",
+        entities=["canary", "system"],
+        uncertainties=["the wording is indirect"],
+    )
+    assert not isinstance(result, CanonError)
+
+
+def test_a_cross_field_leak_leaves_nothing_in_last_judgement() -> None:
+    # `last_judgement` is what a guard reads, and it holds every field
+    # together. Which half of which field held the secret is unanswerable, so
+    # nothing free-text survives rather than a partial redaction leaving a
+    # fragment.
+    policies = _shipped_policies()
+    value = policies.policies[0].protected_values[0]
+    half = len(value) // 2
+    provider = MockProvider(
+        default=_judgement_json(reconstructed_intent=value[:half], requested_action=value[half:])
+    )
+    canonicalizer = LLMCanonicalizer(provider, policies)
+    canonicalizer.canonicalize("prompt", [])
+    judgement = canonicalizer.last_judgement
+    assert judgement is not None
+    fields = [
+        judgement.transformation or "",
+        judgement.reconstructed_intent,
+        judgement.requested_action,
+        *judgement.entities,
+        *judgement.uncertainties,
+    ]
+    assert value not in "".join(fields)
+    assert value[:half] not in "".join(fields)
