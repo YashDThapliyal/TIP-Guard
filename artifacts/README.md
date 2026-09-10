@@ -5,10 +5,29 @@
 report can be recomputed without API access:
 
 ```bash
-uv run python scripts/analyse_study.py artifacts/study-v1/markers
+uv run python scripts/analyse_study.py artifacts/study-v1/markers   # headline tables + findings
+uv run python scripts/report_tables.py artifacts/study-v1/markers   # every other derived table
 ```
 
-That reproduces the report's tables exactly.
+Two scripts, because they answer different questions. `analyse_study.py` emits
+the two condition tables and the interval-supported findings list.
+`report_tables.py` emits the rest: the H1/H4/H5 hypothesis tables, the
+threshold sweep, the blocking-stage attribution, the capability-confound
+comparison with its correlation, and the per-family detection table.
+
+Between them they cover every table in the report that is derived from these
+artifacts. Two are not, and neither is a measurement of the arms:
+
+- The **benchmark composition** table counts the dataset, not a run. Regenerate
+  it with `uv run python -m tipguard.cli.main dataset-stats`.
+- The **40-case-per-type risk-v1/v2 pilot** table ran before the full arms and
+  was never written to a run directory. Its purpose is that it *predicted* the
+  full result in advance, so it cannot honestly be back-derived from the arms
+  it predicted. The report flags it where it appears.
+
+Note also that the report formats these numbers for reading — en-dashes in
+intervals, `n=` dropped from repeated columns, arms labelled `(v1)`/`(v2)` —
+so the values match while the text is not byte-identical to the script output.
 
 ## Layout
 
