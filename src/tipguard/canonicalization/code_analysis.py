@@ -265,6 +265,16 @@ _FUNCTIONS: dict[str, Callable[..., Any]] = {
 }
 
 
+def _is_coda(statement: ast.stmt) -> bool:
+    """Whether a trailing statement is a display line rather than real work.
+
+    Only a bare expression (`print(msg)`) or an assertion qualifies. Anything
+    that binds a name is the snippet doing something, and an unsupported
+    binding stays a refusal.
+    """
+    return isinstance(statement, ast.Expr | ast.Assert | ast.Pass)
+
+
 class RestrictedCodeAnalyzer:
     """Evaluates the whitelisted subset and refuses everything else."""
 
@@ -324,7 +334,14 @@ class RestrictedCodeAnalyzer:
                 # refusal -- an earlier version tested "any string in scope"
                 # and swallowed a genuine size refusal because an operand
                 # happened to be one.
-                if index > 0 and isinstance(scope.get("msg"), str):
+                # Narrowed further: the coda must also *be* a coda. An
+                # unsupported assignment is the snippet's own work, so
+                # `msg = "safe"` followed by `msg = open("x").read()` must
+                # stay refused rather than reporting "safe" as the snippet's
+                # meaning -- otherwise a payload hides behind a harmless
+                # first line, which is an evasion path against the very
+                # canonicalization this feeds.
+                if index > 0 and isinstance(scope.get("msg"), str) and _is_coda(statement):
                     break
                 raise
         if isinstance(last, str):

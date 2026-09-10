@@ -80,6 +80,15 @@ class TIPGuard:
         start = time.perf_counter()
         canonical = self._canonicalizer.run(prompt)
         latency_ms = (time.perf_counter() - start) * 1000
+        # The LLM canonicalizer's call is TIP-Guard's own, and it is the call
+        # that distinguishes this arm from the cheaper baselines. Leaving it
+        # out of `responses` would report the most expensive defence as
+        # costing one call per case less than it does, flattering exactly the
+        # method under test. `last_usage` is None when the LLM view is
+        # disabled or when the provider raised before replying.
+        canon_usage = getattr(getattr(self._canonicalizer, "llm", None), "last_usage", None)
+        if canon_usage is not None:
+            responses.append(canon_usage)
         components.append(
             ComponentTrace(
                 component="canonicalizer",

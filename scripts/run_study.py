@@ -23,6 +23,7 @@ def main() -> int:
     if only:
         configs = [c for c in configs if only in c.name]
     print(f"{len(configs)} configurations", flush=True)
+    failed: list[str] = []
     for index, path in enumerate(configs, 1):
         config = load_yaml_model(path, ExperimentConfig)
         marker = OUT / f"{path.stem}.json"
@@ -37,6 +38,7 @@ def main() -> int:
                 f"[{index}/{len(configs)}] {path.stem}: FAILED {type(exc).__name__}: {exc}",
                 flush=True,
             )
+            failed.append(path.stem)
             continue
         marker.write_text(
             json.dumps({"run_dir": str(artifacts.run_dir), "config": path.name}, indent=2)
@@ -46,6 +48,13 @@ def main() -> int:
             f"[{index}/{len(configs)}] {path.stem}: {elapsed:.0f}s -> {artifacts.run_dir}",
             flush=True,
         )
+    if failed:
+        # One arm's failure must not stop the others -- a long study should
+        # salvage every arm it can -- but the run as a whole did not succeed,
+        # and batch automation reading only the exit status would otherwise
+        # treat an incomplete study as a complete one.
+        print(f"incomplete: {len(failed)} arm(s) failed: {', '.join(failed)}", flush=True)
+        return 1
     return 0
 
 

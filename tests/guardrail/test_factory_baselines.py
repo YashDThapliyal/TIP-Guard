@@ -316,3 +316,75 @@ def test_a_named_prompt_version_reaches_the_classifier(
     classifier = guard._input_classifier
     assert isinstance(classifier, LLMRiskClassifier)
     assert classifier.prompt_version == "risk-v2"
+
+
+def test_the_prompt_version_reaches_an_output_stage_classifier(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """`output_classifier` screens only the answer, so its classifier is the
+    one the input-stage test cannot reach."""
+    guard = build_guardrail(
+        DefenseConfig(name="output_classifier", params={"prompt_version": "risk-v2"}),
+        registry,
+        "mock-main",
+        policies,
+    )
+    assert isinstance(guard, ThresholdGuard)
+    assert guard._output_guard is not None
+    classifier = guard._output_guard._classifier
+    assert isinstance(classifier, LLMRiskClassifier)
+    assert classifier.prompt_version == "risk-v2"
+
+
+def test_both_stages_of_a_two_classifier_arm_share_one_prompt_version(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """`input_output_classifier` builds two classifiers from one params dict.
+
+    An arm whose input stage scored with v2 while its output stage stayed on
+    v1 is neither a clean v1 nor a clean v2 measurement, so it would not
+    answer the question the two arms exist to answer -- and nothing about the
+    run's artifacts would show it. This is the invariant that catches a later
+    refactor specialising one of the two `_llm_classifier` calls.
+    """
+    guard = build_guardrail(
+        DefenseConfig(name="input_output_classifier", params={"prompt_version": "risk-v2"}),
+        registry,
+        "mock-main",
+        policies,
+    )
+    assert isinstance(guard, ThresholdGuard)
+    assert guard._output_guard is not None
+    stages = (guard._input_classifier, guard._output_guard._classifier)
+    for stage in stages:
+        assert isinstance(stage, LLMRiskClassifier)
+        assert stage.prompt_version == "risk-v2"
+
+
+def test_the_v2_prompt_names_the_categories_the_parser_accepts() -> None:
+    """v1 builds its category clause from `RISK_CATEGORIES`; v2 must too.
+
+    A literal list would pass today and drift the first time the category
+    enum changes, leaving v2 asking for a category the parser rejects -- a
+    failure that reads as a parse error rather than as a stale prompt.
+    """
+    from tipguard.classifiers.prompts import RISK_CATEGORIES, RISK_PROMPTS
+
+    for version, text in RISK_PROMPTS.items():
+        for category in RISK_CATEGORIES:
+            assert category in text, f"{version} omits {category}"
+
+
+def test_the_v2_bands_cover_the_whole_range() -> None:
+    """The bands must partition [0, 1] with no gaps.
+
+    v2's first draft used `0.0-0.2 / 0.3-0.5 / 0.6-0.8 / 0.9-1.0`, which
+    leaves 0.25, 0.55 and 0.85 unassigned -- and 0.85 sits right beside the
+    0.7 threshold the arms are compared at, so a score landing in a gap adds
+    noise exactly where the comparison is made.
+    """
+    from tipguard.classifiers.prompts import RISK_SYSTEM_PROMPT_V2
+
+    assert "0.0-0.2" not in RISK_SYSTEM_PROMPT_V2
+    for boundary in ("below 0.3", "0.3 to below 0.6", "0.6 to below 0.9", "0.9 and above"):
+        assert boundary in RISK_SYSTEM_PROMPT_V2

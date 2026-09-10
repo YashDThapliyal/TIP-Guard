@@ -447,6 +447,28 @@ def test_tolerance_for_a_coda_does_not_swallow_a_real_refusal() -> None:
     assert _analyze('msg = "a" * 10').rejected_reason == "operator Mult"
 
 
+def test_a_rebinding_coda_cannot_hide_what_the_snippet_really_does() -> None:
+    """Coda tolerance covers a display line, not a second assignment to `msg`.
+
+    This is an evasion path against the method under study, not a nicety: a
+    snippet could open with a harmless `msg` and then do its real work in an
+    unsupported statement, and the analyzer would hand the guardrail the
+    harmless string as the snippet's canonical meaning. The refusal has to
+    survive.
+    """
+    analysis = _analyze('msg = "safe"\nmsg = open("x").read()')
+    assert analysis.result is None
+    assert analysis.rejected_reason
+
+
+def test_a_trailing_assignment_to_another_name_is_still_a_refusal() -> None:
+    # Same rule, without the rebinding: an assignment is the snippet's own
+    # work, so an unsupported one is a refusal wherever it sits.
+    analysis = _analyze('msg = "safe"\nother = open("x").read()')
+    assert analysis.result is None
+    assert analysis.rejected_reason
+
+
 def test_a_comprehension_cannot_build_many_capped_strings() -> None:
     """A per-value cap bounds one string; it does not bound ten thousand.
 

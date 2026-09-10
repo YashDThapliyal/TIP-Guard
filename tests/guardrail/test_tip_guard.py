@@ -176,3 +176,67 @@ def test_every_stage_leaves_a_component_trace() -> None:
     assert "policy_gate.canonical" in names
     assert "main_model" in names
     assert all(c.latency_ms >= 0.0 for c in result.components)
+
+
+class StubLLMCanonicalizer:
+    """An LLM canonicalizer that makes one model call and reports its usage.
+
+    Mirrors the real `LLMCanonicalizer` contract that `MultiViewCanonicalizer`
+    and `TIPGuard` rely on: `canonicalize` returns views, and `last_usage`
+    carries the response of the call that produced them.
+    """
+
+    def __init__(self) -> None:
+        self.last_usage: ModelResponse | None = None
+        self.last_judgement = None
+
+    def canonicalize(self, text: str, decoded_views: object = ()) -> tuple[()]:
+        self.last_usage = ModelResponse(
+            text="{}",
+            model="mock-canon",
+            provider="mock",
+            input_tokens=11,
+            output_tokens=7,
+            cost_usd=0.25,
+            latency_ms=5.0,
+            cached=False,
+        )
+        return ()
+
+
+def test_the_canonicalizer_model_call_is_counted_in_the_run(policies: PoliciesConfig) -> None:
+    """A TIP-Guard run that consults an LLM canonicalizer pays for that call.
+
+    The whole point of the study's cost column is what each defence costs to
+    operate, and TIP-Guard's extra model call is precisely what it is being
+    charged for against the cheaper baselines. Dropping it would report the
+    most expensive arm as though it ran one call fewer per case -- flattering
+    exactly the defence under test.
+    """
+    llm = StubLLMCanonicalizer()
+    canonicalizer = MultiViewCanonicalizer(
+        detector=TransformationDetector(),
+        deterministic=DeterministicCanonicalizer(),
+        code_analyzer=RestrictedCodeAnalyzer(),
+        llm=llm,  # type: ignore[arg-type]
+        enable={"llm"},
+    )
+    guard = TIPGuard(
+        main_model=MockProvider(default="an ordinary answer"),
+        system_prompt="system",
+        canonicalizer=canonicalizer,
+        gate=PolicyGate(
+            rule=MaxRiskRule(threshold=0.5),
+            input_classifier=None,
+            canonical_classifier=StubClassifier(0.1, name="canonical_classifier"),
+            output_guard=None,
+        ),
+    )
+    result = guard.run("an ordinary question")
+
+    assert llm.last_usage is not None, "the stub should have been consulted"
+    # One main-model call plus the canonicalizer's.
+    assert result.model_calls == 2
+    assert result.input_tokens >= 11
+    assert result.output_tokens >= 7
+    assert result.cost_usd >= 0.25
