@@ -26,7 +26,7 @@ from tipguard.evaluation.run_dir import (
     reserve_run_dir,
 )
 from tipguard.evaluation.summary import CaseRecord, RunSummary, summarize
-from tipguard.guardrail.factory import build_guardrail
+from tipguard.guardrail.factory import build_guardrail, resolve_params
 from tipguard.logging import get_logger, redacting
 from tipguard.models.cache import ResponseCache
 from tipguard.models.registry import ProviderRegistry
@@ -137,6 +137,12 @@ def _build_manifest(
         "tipguard_version": __version__,
         "python_version": platform.python_version(),
         "defense": config.defense.name,
+        # What the defence actually ran with, defaults resolved. `config`
+        # above records only what the YAML wrote, which cannot answer "what
+        # threshold was this run using" when the YAML omitted it.
+        "effective_defense_params": {
+            key: value for key, value in sorted(resolve_params(config.defense).items())
+        },
         "output_dir": str(output_dir),
         "main_model": {"alias": config.main_model, "provider": spec.provider, "model": spec.model},
     }

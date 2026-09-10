@@ -388,3 +388,48 @@ def test_the_v2_bands_cover_the_whole_range() -> None:
     assert "0.0-0.2" not in RISK_SYSTEM_PROMPT_V2
     for boundary in ("below 0.3", "0.3 to below 0.6", "0.6 to below 0.9", "0.9 and above"):
         assert boundary in RISK_SYSTEM_PROMPT_V2
+
+
+def test_the_defaults_mapping_covers_exactly_the_accepted_params() -> None:
+    """`DEFAULTS` is what a run's manifest reports an omitted parameter became,
+    and `KNOWN_PARAMS` is what a config may set. If they diverge, the manifest
+    either invents a parameter the defence does not read, or silently omits one
+    it does -- and the second is the failure this whole mechanism exists to
+    prevent, since it is how the study's threshold went unrecorded.
+    """
+    from tipguard.guardrail import baselines, tip_guard_factory
+
+    for module in (baselines, tip_guard_factory):
+        assert frozenset(module.DEFAULTS) == module.KNOWN_PARAMS, (
+            f"{module.__name__}: DEFAULTS and KNOWN_PARAMS disagree on "
+            f"{frozenset(module.DEFAULTS) ^ module.KNOWN_PARAMS}"
+        )
+
+
+def test_resolved_params_fill_in_what_a_config_omitted(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    from tipguard.guardrail.baselines import DEFAULTS
+    from tipguard.guardrail.factory import resolve_params
+
+    resolved = resolve_params(
+        DefenseConfig(name="input_classifier", params={"input_threshold": 0.9})
+    )
+    assert resolved["input_threshold"] == 0.9, "an explicit value must win"
+    assert resolved["classifier_model"] == DEFAULTS["classifier_model"], "a default must fill in"
+    assert set(resolved) == set(DEFAULTS)
+
+
+def test_the_resolved_threshold_is_the_one_the_guard_runs_with(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """The recorded value has to be the value that actually took effect, or the
+    manifest documents a fiction."""
+    from tipguard.guardrail.factory import resolve_params
+    from tipguard.guardrail.threshold import ThresholdGuard
+
+    for params in ({}, {"input_threshold": 0.8}):
+        config = DefenseConfig(name="input_classifier", params=params)
+        guard = build_guardrail(config, registry, "mock-main", policies)
+        assert isinstance(guard, ThresholdGuard)
+        assert guard._input_threshold == resolve_params(config)["input_threshold"]

@@ -2,7 +2,7 @@
 
 from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import DefenseConfig, PoliciesConfig
-from tipguard.guardrail import baselines
+from tipguard.guardrail import baselines, tip_guard_factory
 from tipguard.guardrail.no_defense import NoDefense
 from tipguard.guardrail.tip_guard_factory import build_tip_guard
 from tipguard.guardrail.types import (
@@ -11,6 +11,43 @@ from tipguard.guardrail.types import (
     build_system_prompt,
 )
 from tipguard.models.registry import ProviderRegistry
+
+
+def resolve_params(defense: DefenseConfig) -> dict[str, object]:
+    """The parameters a defence will actually run with, defaults filled in.
+
+    A `DefenseConfig` records only what its YAML wrote, so a run's manifest
+    built from it cannot say what an omitted parameter became. That is not
+    hypothetical: every study arm omitted `input_threshold`, so the threshold
+    they all ran at was never stored, and recovering it later meant inferring
+    it from the recorded decisions. Recording this alongside the config closes
+    that gap for future runs.
+
+    Unknown defence names return the config's own params rather than raising,
+    because this is called to describe a run, not to validate one --
+    `build_guardrail` owns the validation and will reject the name anyway.
+    """
+    if defense.name == "no_defense":
+        return dict(defense.params)
+    defaults = tip_guard_factory.DEFAULTS if defense.name == "tip_guard" else baselines.DEFAULTS
+    if defense.name not in DEFENSE_NAMES:
+        return dict(defense.params)
+    return {**defaults, **defense.params}
+
+
+#: Every defence `build_guardrail` accepts. Stated so `resolve_params` can
+#: tell an unknown name from a known one without duplicating the dispatch.
+DEFENSE_NAMES = frozenset(
+    {
+        "no_defense",
+        "keyword_filter",
+        "pattern_detector",
+        "input_classifier",
+        "output_classifier",
+        "input_output_classifier",
+        "tip_guard",
+    }
+)
 
 
 def build_guardrail(

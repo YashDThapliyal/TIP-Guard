@@ -21,21 +21,36 @@ from tipguard.models.registry import ProviderRegistry
 from .output_guard import OutputGuard
 from .threshold import ThresholdGuard
 
+#: Every parameter a baseline reads, and what it resolves to when a config
+#: omits it. This is the single source of both, so that a run's manifest can
+#: record what an omitted parameter actually became -- an earlier format
+#: stored the config as written, which meant the threshold every study arm ran
+#: at was never recorded anywhere and had to be inferred from the decisions.
+#:
+#: The parse calls below read from this mapping rather than from literals, so
+#: a default cannot be changed in one place and reported from another.
+DEFAULTS: dict[str, Any] = {
+    "classifier_model": "mock-judge",
+    "prompt_version": PROMPT_VERSION,
+    "input_threshold": 0.5,
+    "output_threshold": 0.5,
+    "leak_check": True,
+}
+
+KNOWN_PARAMS = frozenset(DEFAULTS)
+
 #: Which model rates risk when a defence needs one. A mock by default so the
 #: whole baseline suite runs offline and in CI; real aliases are selected by
 #: the experiment configs.
-DEFAULT_CLASSIFIER_MODEL = "mock-judge"
+DEFAULT_CLASSIFIER_MODEL = DEFAULTS["classifier_model"]
 
-DEFAULT_THRESHOLD = 0.5
+DEFAULT_THRESHOLD = DEFAULTS["input_threshold"]
 
 
 #: Every key a baseline understands. A `DefenseConfig.params` is an open
 #: mapping, so a mistyped key would otherwise fall back to the default in
 #: silence -- and a Phase 7 threshold sweep that mistyped one would report the
 #: default arm as though it had swept.
-KNOWN_PARAMS = frozenset(
-    {"classifier_model", "prompt_version", "input_threshold", "output_threshold", "leak_check"}
-)
 
 _TRUE = frozenset({"true", "yes", "on", "1"})
 _FALSE = frozenset({"false", "no", "off", "0"})
@@ -51,7 +66,7 @@ def _check_params(params: Mapping[str, Any], defense: str) -> None:
 
 
 def _threshold(params: Mapping[str, Any], key: str, defense: str) -> float:
-    raw = params.get(key, DEFAULT_THRESHOLD)
+    raw = params.get(key, DEFAULTS[key])
     try:
         value = float(raw)
     except (TypeError, ValueError) as exc:
@@ -95,12 +110,12 @@ def _llm_classifier(
     support. `LLMRiskClassifier` rejects an unknown version, so a typo fails
     the build instead of quietly scoring with the default.
     """
-    alias = str(params.get("classifier_model", DEFAULT_CLASSIFIER_MODEL))
+    alias = str(params.get("classifier_model", DEFAULTS["classifier_model"]))
     return LLMRiskClassifier(
         provider=registry.get(alias),
         policies=policies,
         name=name,
-        prompt_version=str(params.get("prompt_version", PROMPT_VERSION)),
+        prompt_version=str(params.get("prompt_version", DEFAULTS["prompt_version"])),
     )
 
 

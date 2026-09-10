@@ -33,21 +33,24 @@ DEFAULT_CLASSIFIER_MODEL = "mock-judge"
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_RULE = "max"
 
-KNOWN_PARAMS = frozenset(
-    {
-        "canonicalizer_model",
-        "classifier_model",
-        "prompt_version",
-        "rule",
-        "threshold",
-        "enable_detector",
-        "enable_decoders",
-        "enable_code_analyzer",
-        "enable_llm_canonicalizer",
-        "enable_original_classifier",
-        "enable_output_guard",
-    }
-)
+#: Every parameter this pipeline reads, and what it resolves to when a config
+#: omits it. Single source of both, so a run's manifest can record what an
+#: omitted parameter actually became; see `baselines.DEFAULTS`.
+DEFAULTS: dict[str, Any] = {
+    "canonicalizer_model": DEFAULT_CANONICALIZER_MODEL,
+    "classifier_model": DEFAULT_CLASSIFIER_MODEL,
+    "prompt_version": PROMPT_VERSION,
+    "rule": DEFAULT_RULE,
+    "threshold": DEFAULT_THRESHOLD,
+    "enable_detector": True,
+    "enable_decoders": True,
+    "enable_code_analyzer": True,
+    "enable_llm_canonicalizer": True,
+    "enable_original_classifier": True,
+    "enable_output_guard": True,
+}
+
+KNOWN_PARAMS = frozenset(DEFAULTS)
 
 _RULES: dict[str, type[MaxRiskRule | ConfidenceEscalationRule]] = {
     "max": MaxRiskRule,
@@ -76,7 +79,7 @@ class _NoOpDetector(TransformationDetector):
 
 
 def _rule(params: dict[str, Any], threshold: float, defense: str) -> DecisionRule:
-    name = str(params.get("rule", DEFAULT_RULE))
+    name = str(params.get("rule", DEFAULTS["rule"]))
     if name not in _RULES:
         raise ConfigError(
             f"defense {defense!r}: rule must be one of {sorted(_RULES)}, got {name!r}"
@@ -94,27 +97,33 @@ def build_tip_guard(
     name = "tip_guard"
     check_known_params(params, KNOWN_PARAMS, name)
 
-    threshold = parse_threshold(params, "threshold", DEFAULT_THRESHOLD, name)
-    canonicalizer_alias = str(params.get("canonicalizer_model", DEFAULT_CANONICALIZER_MODEL))
-    classifier_alias = str(params.get("classifier_model", DEFAULT_CLASSIFIER_MODEL))
+    threshold = parse_threshold(params, "threshold", DEFAULTS["threshold"], name)
+    canonicalizer_alias = str(params.get("canonicalizer_model", DEFAULTS["canonicalizer_model"]))
+    classifier_alias = str(params.get("classifier_model", DEFAULTS["classifier_model"]))
     # One version for all three classifiers this builds. The study compares
     # TIP-Guard against the calibrated-prompt baseline, so leaving these on
     # the defective v1 prompt would measure that defect instead of
     # canonicalization; letting the three stages disagree would measure
     # neither version.
-    prompt_version = str(params.get("prompt_version", PROMPT_VERSION))
+    prompt_version = str(params.get("prompt_version", DEFAULTS["prompt_version"]))
 
-    enable_detector = parse_bool(params, "enable_detector", True, name)
-    enable_decoders = parse_bool(params, "enable_decoders", True, name)
+    enable_detector = parse_bool(params, "enable_detector", DEFAULTS["enable_detector"], name)
+    enable_decoders = parse_bool(params, "enable_decoders", DEFAULTS["enable_decoders"], name)
     # `RestrictedCodeAnalyzer` is always built: `MultiViewCanonicalizer.run`
     # does not call it directly today (see its own docstring), so there is
     # nothing yet for this switch to turn off. Still parsed and validated so
     # a config naming it gets a real boolean check rather than a silent
     # "unknown param" rejection once a later phase wires the analyzer in.
-    parse_bool(params, "enable_code_analyzer", True, name)
-    enable_llm_canonicalizer = parse_bool(params, "enable_llm_canonicalizer", True, name)
-    enable_original_classifier = parse_bool(params, "enable_original_classifier", True, name)
-    enable_output_guard = parse_bool(params, "enable_output_guard", True, name)
+    parse_bool(params, "enable_code_analyzer", DEFAULTS["enable_code_analyzer"], name)
+    enable_llm_canonicalizer = parse_bool(
+        params, "enable_llm_canonicalizer", DEFAULTS["enable_llm_canonicalizer"], name
+    )
+    enable_original_classifier = parse_bool(
+        params, "enable_original_classifier", DEFAULTS["enable_original_classifier"], name
+    )
+    enable_output_guard = parse_bool(
+        params, "enable_output_guard", DEFAULTS["enable_output_guard"], name
+    )
 
     canonicalize_enable: set[str] = set()
     if enable_decoders:
