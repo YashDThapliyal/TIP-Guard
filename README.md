@@ -225,14 +225,17 @@ tests/
 
 [Apache-2.0](LICENSE), covering the code and the synthetic benchmark alike.
 
-Chosen over MIT chiefly for the express patent grant in section 3, which MIT
-has no equivalent of. Read the clause rather than a summary of it — including
-this one — but in outline it runs from each contributor, and covers only patent
-claims that contributor can license which are necessarily infringed by their
-own contribution. So it constrains contributors; it is not protection against
-third-party patent claims, and no licence could offer that. Section 4(b)'s
-requirement that modified files carry a notice of change also suits a benchmark
-whose results depend on the exact corpus.
+Chosen over MIT for two things MIT does not have: the express patent grant in
+section 3, and section 4(b)'s requirement that modified files carry a notice of
+change — the latter suits a benchmark whose results depend on the exact corpus.
+
+For what section 3 actually grants, read [section 3](LICENSE). This file does
+not summarise it. Three attempts at a one-paragraph gloss were each wrong, and
+each wrong in the direction of overstating what a user gets: the first implied
+blanket protection from patent claims, and the last omitted that the grant
+reaches claims infringed by a contribution *in combination with the Work*, not
+only by the contribution alone. The clause is a hundred words and sits in this
+repository; a paraphrase adds nothing and has so far only misled.
 
 Every protected value in `configs/policies.yaml` is a fictional canary,
 committed deliberately so the study's numbers can be verified rather than
