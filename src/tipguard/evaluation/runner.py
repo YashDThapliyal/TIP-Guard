@@ -188,6 +188,15 @@ def _run_evaluated(
     """Reserve the run directory, evaluate, and persist — the body of a run."""
     cases = load_cases(config.dataset)
     _ensure_dataset_valid(cases, policies, config.dataset)
+    if config.splits:
+        wanted = set(config.splits)
+        cases = tuple(case for case in cases if case.split in wanted)
+        if not cases:
+            raise ConfigError(
+                f"no cases in splits {sorted(s.value for s in wanted)}; "
+                f"{config.dataset} holds "
+                f"{sorted({case.split.value for case in load_cases(config.dataset)})}"
+            )
     cases = cases[: config.limit]
     resolved_run_id = run_id or make_run_id(config.name, config, now=now)
     _ensure_run_id_safe(resolved_run_id)
@@ -229,7 +238,9 @@ def _evaluate_and_build_manifest(
     cache = ResponseCache(config.cache_dir / "responses.sqlite") if config.cache_dir else None
     try:
         registry = ProviderRegistry(models, cache=cache)
-        guardrail = build_guardrail(config.defense, registry, config.main_model, policies)
+        guardrail = build_guardrail(
+            config.defense, registry, config.main_model, policies, config.system_prompt
+        )
         records = tuple(evaluate_case(case, guardrail, policies) for case in cases)
         _log_records(records)
         summary = summarize(records)

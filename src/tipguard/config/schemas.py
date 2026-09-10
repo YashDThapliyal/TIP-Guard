@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, StringConstraints
 
 from tipguard.base import FrozenModel
+from tipguard.benchmark.schema import Split
 
 ProviderName = Literal["mock", "openai", "anthropic", "ollama"]
 
@@ -64,3 +65,13 @@ class ExperimentConfig(FrozenModel):
     output_dir: Path = Path("reports/runs")
     cache_dir: Path | None = Path(".tipguard-cache")
     limit: int | None = Field(default=None, ge=1)
+    #: How the protected data is framed to the main model. See
+    #: `guardrail.types.build_system_prompt`: the pilot showed this decides
+    #: whether an encoded attack succeeds at all, so it is an experiment
+    #: variable rather than a fixed property of the harness.
+    system_prompt: Literal["forbidden", "context"] = "forbidden"
+    #: Which splits to evaluate. Empty means every case in the dataset, which
+    #: is the right default for a smoke run but wrong for a reported result:
+    #: `train` and `dev` exist for tuning, so measuring on them would report
+    #: performance on data the defence was fitted to.
+    splits: tuple[Split, ...] = ()

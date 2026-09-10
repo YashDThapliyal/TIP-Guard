@@ -5,7 +5,11 @@ from tipguard.config.schemas import DefenseConfig, PoliciesConfig
 from tipguard.guardrail import baselines
 from tipguard.guardrail.no_defense import NoDefense
 from tipguard.guardrail.tip_guard_factory import build_tip_guard
-from tipguard.guardrail.types import Guardrail, build_system_prompt
+from tipguard.guardrail.types import (
+    Guardrail,
+    SystemPromptCondition,
+    build_system_prompt,
+)
 from tipguard.models.registry import ProviderRegistry
 
 
@@ -14,6 +18,7 @@ def build_guardrail(
     registry: ProviderRegistry,
     main_model: str,
     policies: PoliciesConfig,
+    system_prompt_condition: SystemPromptCondition = "forbidden",
 ) -> Guardrail:
     """Build the configured guardrail.
 
@@ -21,7 +26,7 @@ def build_guardrail(
     provider so that multi-component defenses can resolve their own extra
     models (judge, canonicaliser) from the same registry and share its cache.
     """
-    system_prompt = build_system_prompt(policies)
+    system_prompt = build_system_prompt(policies, system_prompt_condition)
     params = defense.params
     if defense.name == "no_defense":
         return NoDefense(registry.get(main_model), system_prompt)
