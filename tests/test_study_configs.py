@@ -144,6 +144,33 @@ def test_the_ablation_pair_agrees_on_everything_but_the_switches(condition: str)
 
 
 @pytest.mark.parametrize("condition", ["context", "forbidden"])
+def test_the_ablated_switches_are_off_in_one_arm_and_on_in_the_other(condition: str) -> None:
+    """The exhaustive config comparison deliberately ignores the two switches,
+    so something else has to say what they are set to.
+
+    Without this, an ablation pair could have canonicalization disabled in
+    *both* arms and satisfy every other check -- and a full arm with the
+    decoders switched off would make the pair differ only in the LLM
+    canonicalizer while the study reported the difference as
+    canonicalization. This test was lost for one commit when the exhaustive
+    check replaced too wide a range of the file; the gap was real and is what
+    this guards.
+    """
+    analysis = _load_analysis_module()
+    full_name, ablated_name = analysis.CANON_ABLATION
+    full = _params(f"{full_name}-{condition}")
+    ablated = _params(f"{ablated_name}-{condition}")
+    for switch in CANON_SWITCHES:
+        assert str(ablated.get(switch)).lower() == "false", (
+            f"{condition}: {switch} is not disabled in the ablated arm"
+        )
+        # Absent means the default, which is on.
+        assert switch not in full or str(full[switch]).lower() == "true", (
+            f"{condition}: {switch} is not enabled in the full arm"
+        )
+
+
+@pytest.mark.parametrize("condition", ["context", "forbidden"])
 def test_the_ablation_pair_builds_pipelines_that_differ_only_in_canonicalization(
     condition: str,
 ) -> None:
@@ -162,7 +189,13 @@ def test_the_ablation_pair_builds_pipelines_that_differ_only_in_canonicalization
     ablated = _built(f"{ablated_name}-{condition}")
 
     # Canonicalization: on in one, genuinely off in the other.
-    assert full._canonicalizer.enable, "the full arm canonicalizes nothing"
+    # Exact, not merely non-empty: `enable` holding only {"llm"} is a full
+    # arm with the deterministic decoders switched off, which would make the
+    # pair differ in the LLM canonicalizer alone while being reported as
+    # canonicalization.
+    assert full._canonicalizer.enable == {"deterministic", "llm"}, (
+        f"the full arm enables only {sorted(full._canonicalizer.enable)}"
+    )
     assert not ablated._canonicalizer.enable, "the ablated arm still canonicalizes"
     assert full._canonicalizer.llm is not None
     assert ablated._canonicalizer.llm is None
