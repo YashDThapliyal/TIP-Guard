@@ -17,6 +17,7 @@ so it cannot be, and should not be, back-derived from the arms it predicted.
 The report says so where it appears.
 """
 
+import ast
 import json
 import sys
 from collections import defaultdict
@@ -332,6 +333,104 @@ def undefended_by_family() -> None:
     )
 
 
+#: The label review the "validate automatic evaluation" criterion refers to.
+GOLD_REVIEW = Path("data/labels/gold-review.jsonl")
+
+#: Modules that turn attacker-supplied text into a canonical form. The
+#: no-execution criterion is a claim about these.
+CANONICALIZATION = Path("src/tipguard/canonicalization")
+
+#: Builtins that would execute attacker-controlled input if called directly.
+EXECUTION_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
+
+#: Modules whose calls run external processes.
+EXECUTION_MODULES = frozenset({"os", "subprocess", "runpy", "importlib"})
+
+
+def _gold_review_row() -> tuple[str, str, str]:
+    """Scored from the review file rather than asserted.
+
+    An earlier version of this table reported "no gold-review artifact
+    exists", which was false -- the check looked in the wrong directory and a
+    failed glob was read as an answer.
+    """
+    if not GOLD_REVIEW.exists():
+        return (
+            "Validate automatic evaluation against a human-reviewed subset",
+            f"{GOLD_REVIEW} not found",
+            "not done",
+        )
+    verdicts = [
+        json.loads(line)["verdict"]
+        for line in GOLD_REVIEW.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    reviewers = {
+        json.loads(line)["reviewer"]
+        for line in GOLD_REVIEW.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
+    agreement = verdicts.count("correct") / len(verdicts)
+    human = any(not r.startswith("agent:") for r in reviewers)
+    return (
+        "Validate automatic evaluation against a human-reviewed subset",
+        f"{agreement:.2f} agreement over {len(verdicts)} cases, reviewed by "
+        f"{', '.join(sorted(reviewers))}",
+        "met" if (agreement >= 0.90 and human) else "**partially met**",
+    )
+
+
+def _manifest_row() -> tuple[str, str, str]:
+    """Checked against a real manifest rather than described."""
+    required = {"config", "config_hash", "dataset_sha256", "main_model", "tipguard_version"}
+    markers = sorted(MARKERS.glob("*.json"))
+    if not markers:
+        return ("Record reproducible model, prompt, dataset and config versions", "no runs", "-")
+    run_dir = Path(json.loads(markers[0].read_text(encoding="utf-8"))["run_dir"])
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    missing = sorted(required - set(manifest))
+    return (
+        "Record reproducible model, prompt, dataset and config versions",
+        "per-run manifest carries " + ", ".join(f"`{k}`" for k in sorted(required)),
+        "met" if not missing else f"**missing {missing}**",
+    )
+
+
+def _no_execution_row() -> tuple[str, str, str]:
+    """Checked by parsing the canonicalization modules, not by grepping them.
+
+    A substring scan for `compile(` flagged `re.compile` in the transformation
+    detector -- regex compilation, not code execution. Matching on text cannot
+    tell a builtin from an attribute of an unrelated module, which is the same
+    reason this project analyses benchmark code with an AST walk rather than
+    pattern matching. So this walks the tree: a bare call to `exec`, `eval`,
+    `compile` or `__import__`, or any call through `os`/`subprocess`/`runpy`/
+    `importlib`, is an offender; `re.compile` is not.
+    """
+    offenders: list[str] = []
+    modules = sorted(CANONICALIZATION.rglob("*.py"))
+    for path in modules:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in EXECUTION_BUILTINS:
+                offenders.append(f"{path.name}:{func.id}")
+            elif (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id in EXECUTION_MODULES
+            ):
+                offenders.append(f"{path.name}:{func.value.id}.{func.attr}")
+    return (
+        "Prevent execution of arbitrary benchmark code",
+        f"no exec/eval/compile/__import__ call and no os/subprocess call across "
+        f"{len(modules)} canonicalization modules, by AST walk",
+        "met" if not offenders else f"**found {sorted(set(offenders))}**",
+    )
+
+
 def success_criteria() -> None:
     """The project's own pre-registered success criteria, scored.
 
@@ -374,21 +473,9 @@ def success_criteria() -> None:
             f"{io_unseen:.2f} -> {tip_unseen:.2f} ({unseen_gain * 100:.0f}% relative)",
             "**not met**",
         ),
-        (
-            "Validate automatic evaluation against a human-reviewed subset",
-            "no gold-review artifact exists",
-            "not done",
-        ),
-        (
-            "Record reproducible model, prompt, dataset and config versions",
-            "per-run manifest with config hash and dataset digest",
-            "met",
-        ),
-        (
-            "Prevent execution of arbitrary benchmark code",
-            "code cases parsed statically; no execution path",
-            "met",
-        ),
+        _gold_review_row(),
+        _manifest_row(),
+        _no_execution_row(),
     ]
     table(("Criterion", "Measured", "Verdict"), rows)
 

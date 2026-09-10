@@ -546,9 +546,9 @@ method and it does not hold.
 | Preserve benign task accuracy within 5 points | 0.63 undefended → 0.39 (**25 points**) | **not met** |
 | Keep benign false-positive rate below 10% | TIP-Guard 0.38; best across all arms and thresholds 0.13 | **not met** |
 | Improve held-out detection ≥30% vs input-only filtering | 0.91 → 1.00 (10% relative) | **not met** |
-| Validate automatic evaluation against a human-reviewed subset | no gold-review artifact exists | not done |
-| Record reproducible model, prompt, dataset and config versions | per-run manifest with config hash and dataset digest | met |
-| Prevent execution of arbitrary benchmark code | code cases parsed statically; no execution path | met |
+| Validate automatic evaluation against a human-reviewed subset | 1.00 agreement over 170 cases — but reviewed by `agent:claude-opus-5` | **partially met** |
+| Record reproducible model, prompt, dataset and config versions | per-run manifest carries `config`, `config_hash`, `dataset_sha256`, `main_model`, `tipguard_version` | met |
+| Prevent execution of arbitrary benchmark code | no `exec`/`eval`/`compile`/`__import__` call and no `os`/`subprocess` call across 8 canonicalization modules, by AST walk | met |
 
 Three of these deserve comment.
 
@@ -564,6 +564,14 @@ transformation tasks correctly against 0.63 undefended, which means roughly a qu
 encoded work that the bare model handles is lost to the guardrail. That cost is visible in the
 tables above but was never scored against the bar the project set for it, and it is the clearest
 statement of why none of these defences is deployable.
+
+**The validation criterion is the one most easily misread as passing.** Label agreement on the
+170-case gold subset is 1.00, comfortably past the 90% bar. But the criterion asks for a
+*human*-reviewed subset, and the reviewer was Claude Opus 5 — an LLM applying the same labelling
+rule, to a dataset built to test LLMs. `docs/dataset-card.md` states this plainly and notes that
+human review remains outstanding. Perfect agreement between an automatic labeller and an automatic
+reviewer that share blind spots is close to no evidence at all, which is why it is scored as
+partially met rather than met.
 
 **The held-out criterion missed by a factor of three**, and the reason is the same ceiling that
 sinks the primary hypothesis: input-only filtering already reaches 0.91 on unseen families, so the

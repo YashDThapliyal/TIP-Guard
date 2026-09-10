@@ -252,3 +252,45 @@ def test_the_shipped_default_still_matches_the_committed_runs() -> None:
         "runs used -- the artifacts predate the current default and the report's operating-point "
         "discussion needs revisiting"
     )
+
+
+def _verdict_column(text: str, heading: str) -> list[str]:
+    """The last column of the success-criteria table under `heading`."""
+    block = text[text.index(heading) :]
+    rows = [line for line in block.splitlines() if line.startswith("| ")]
+    # Skip the header row and its separator; take the seven criteria.
+    return [row.rsplit("|", 2)[1].strip() for row in rows[2:9]]
+
+
+def test_the_reported_success_verdicts_match_the_scored_ones(generated: str) -> None:
+    """The success-criteria verdicts in the report are typed by hand.
+
+    Nothing else here would catch them drifting: the interval test only reads
+    confidence intervals, and this table quotes bare values. That gap is not
+    hypothetical -- the row for the validation criterion once read "no
+    gold-review artifact exists / not done", which was false. The artifact was
+    there; a glob had looked in the wrong directory and the failure was read
+    as an answer.
+    """
+    reported = _verdict_column(
+        REPORT.read_text(encoding="utf-8"), "The success criteria as registered"
+    )
+    scored = _verdict_column(generated, "Pre-registered success criteria")
+    assert reported == scored, (
+        f"the report states verdicts the scoring does not produce:\n"
+        f"  report: {reported}\n  scored: {scored}"
+    )
+
+
+def test_the_gold_review_is_scored_from_the_file_that_exists() -> None:
+    """Guards the specific false claim above: if the review file is present,
+    the table must not report it missing."""
+    review = Path("data/labels/gold-review.jsonl")
+    if not review.exists():
+        pytest.skip("no gold review in this checkout")
+    text = REPORT.read_text(encoding="utf-8")
+    assert "no gold-review artifact exists" not in text
+    assert "agent:claude-opus-5" in text, (
+        "the report must name the reviewer, since an LLM reviewing an "
+        "LLM-built dataset is what makes this criterion only partially met"
+    )
