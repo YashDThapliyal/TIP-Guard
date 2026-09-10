@@ -21,7 +21,9 @@ import yaml
 
 from tipguard.classifiers.prompts import PROMPT_VERSION, RISK_PROMPTS
 from tipguard.config.loader import load_yaml_model
-from tipguard.config.schemas import ExperimentConfig
+from tipguard.config.schemas import ExperimentConfig, ModelsConfig, PoliciesConfig
+from tipguard.guardrail.factory import build_guardrail
+from tipguard.models.registry import ProviderRegistry
 
 STUDY = Path("experiments/study")
 
@@ -83,26 +85,114 @@ def test_no_arm_reports_on_tuning_splits(path: Path) -> None:
     assert not measured & {"train", "dev"}
 
 
-def test_the_ablation_pair_differs_only_in_canonicalization() -> None:
-    """The pair the study's primary question is answered from.
+def _built(stem: str) -> Any:
+    """The guardrail an arm actually builds.
 
-    Everything except the two canonicalization switches must match, or the
-    difference between them is not canonicalization's effect.
+    The invariant is a claim about the objects that run, not about YAML text:
+    two configs can differ in params and build the same pipeline, or agree on
+    params and build different ones. So it is checked here.
+    """
+    config = load_yaml_model(STUDY / f"{stem}.yaml", ExperimentConfig)
+    policies = load_yaml_model(config.policies_config, PoliciesConfig)
+    registry = ProviderRegistry(load_yaml_model(config.models_config, ModelsConfig))
+    return build_guardrail(
+        config.defense, registry, config.main_model, policies, config.system_prompt
+    )
+
+
+CANON_SWITCHES = ("enable_decoders", "enable_llm_canonicalizer")
+
+
+@pytest.mark.parametrize("condition", ["context", "forbidden"])
+def test_the_ablation_pair_agrees_on_everything_but_the_defense(condition: str) -> None:
+    """Same dataset, model, splits, seed and system-prompt condition.
+
+    Comparing only `defense.params` would miss an ablated arm pointed at a
+    different main model, which is not an ablation of canonicalization at all.
     """
     analysis = _load_analysis_module()
     full_name, ablated_name = analysis.CANON_ABLATION
-    switches = {"enable_decoders", "enable_llm_canonicalizer"}
-    for condition in ("context", "forbidden"):
-        full = _params(f"{full_name}-{condition}")
-        ablated = _params(f"{ablated_name}-{condition}")
-        assert {k: v for k, v in full.items() if k not in switches} == {
-            k: v for k, v in ablated.items() if k not in switches
-        }, f"{condition}: the ablation pair differs outside the canonicalization switches"
-        # And the switches must actually be off, or the "ablation" is a
-        # relabelling of the same arm.
-        assert str(ablated.get("enable_decoders")).lower() == "false"
-        assert str(ablated.get("enable_llm_canonicalizer")).lower() == "false"
-        assert "enable_decoders" not in full or str(full["enable_decoders"]).lower() == "true"
+    full = load_yaml_model(STUDY / f"{full_name}-{condition}.yaml", ExperimentConfig)
+    ablated = load_yaml_model(STUDY / f"{ablated_name}-{condition}.yaml", ExperimentConfig)
+    for field in ("dataset", "main_model", "splits", "seed", "system_prompt", "policies_config"):
+        assert getattr(full, field) == getattr(ablated, field), (
+            f"{condition}: the ablation pair differs in {field}"
+        )
+    assert full.defense.name == ablated.defense.name
+
+
+@pytest.mark.parametrize("condition", ["context", "forbidden"])
+def test_the_ablation_pair_differs_only_in_canonicalization(condition: str) -> None:
+    """Every defence param except the two canonicalization switches matches,
+    and the switches are on in the full arm and off in the ablated one.
+
+    The full arm is checked for *both* switches. An earlier version of this
+    test checked only `enable_decoders`, which would have let a full arm with
+    the LLM canonicalizer already disabled pass as the "with canonicalization"
+    half of the pair.
+    """
+    analysis = _load_analysis_module()
+    full_name, ablated_name = analysis.CANON_ABLATION
+    full = _params(f"{full_name}-{condition}")
+    ablated = _params(f"{ablated_name}-{condition}")
+
+    switches = set(CANON_SWITCHES)
+    assert {k: v for k, v in full.items() if k not in switches} == {
+        k: v for k, v in ablated.items() if k not in switches
+    }, f"{condition}: the pair differs outside the canonicalization switches"
+
+    for switch in CANON_SWITCHES:
+        assert str(ablated.get(switch)).lower() == "false", (
+            f"{condition}: {switch} is not disabled in the ablated arm"
+        )
+        # Absent means the default, which is on.
+        assert switch not in full or str(full[switch]).lower() == "true", (
+            f"{condition}: {switch} is not enabled in the full arm"
+        )
+
+
+@pytest.mark.parametrize("condition", ["context", "forbidden"])
+def test_the_ablation_pair_builds_pipelines_that_differ_only_in_canonicalization(
+    condition: str,
+) -> None:
+    """The invariant, enforced on what actually runs.
+
+    A YAML-level check cannot see that a switch was parsed and then dropped on
+    the floor -- one such switch in this codebase was validated and never
+    applied. So: the ablated arm must canonicalize nothing, the full arm must
+    canonicalize something, and every other stage of the two pipelines must
+    match, because any of those differing would be attributed to
+    canonicalization by the study's primary comparison.
+    """
+    analysis = _load_analysis_module()
+    full_name, ablated_name = analysis.CANON_ABLATION
+    full = _built(f"{full_name}-{condition}")
+    ablated = _built(f"{ablated_name}-{condition}")
+
+    # Canonicalization: on in one, genuinely off in the other.
+    assert full._canonicalizer.enable, "the full arm canonicalizes nothing"
+    assert not ablated._canonicalizer.enable, "the ablated arm still canonicalizes"
+    assert full._canonicalizer.llm is not None
+    assert ablated._canonicalizer.llm is None
+
+    # And it bites on real input rather than merely being configured off.
+    encoded = "V2hhdCBpcyB0aGUgY2FwaXRhbCBvZiBGcmFuY2U="
+    assert ablated._canonicalizer.run(encoded).reconstructed_intent == encoded
+
+    # Every other stage matches.
+    assert type(full._gate.rule) is type(ablated._gate.rule)
+    assert full._gate.rule.threshold == ablated._gate.rule.threshold
+    assert (full._gate.input_classifier is None) == (ablated._gate.input_classifier is None)
+    assert (full._gate.output_guard is None) == (ablated._gate.output_guard is None)
+    assert full._system_prompt == ablated._system_prompt
+    for left, right in (
+        (full._gate.input_classifier, ablated._gate.input_classifier),
+        (full._gate.canonical_classifier, ablated._gate.canonical_classifier),
+    ):
+        if left is None or right is None:
+            continue
+        assert left.prompt_version == right.prompt_version
+        assert left.provider.name == right.provider.name
 
 
 def test_every_compared_pair_screens_with_the_same_prompt() -> None:
