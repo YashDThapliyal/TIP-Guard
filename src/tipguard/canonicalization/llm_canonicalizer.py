@@ -48,7 +48,6 @@ from tipguard.canonicalization.prompts import (
 from tipguard.canonicalization.types import CanonicalView, ErrorCategory
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.logging import redact
-from tipguard.matching import squash
 from tipguard.models.json_utils import iter_json_objects
 from tipguard.models.types import ModelProvider, ModelRequest, ModelResponse
 
@@ -258,34 +257,6 @@ def _free_text(judgement: CanonJudgement) -> list[str]:
 PARTIAL_DISCLOSURE_LENGTH = 8
 
 
-#: Longest protected value this rule will scan. Beyond it the per-reply cost
-#: grows with the value's own length for no gain: a secret that long is not
-#: one a model reproduces by halves.
-MAX_SCANNED_VALUE = 512
-
-#: Shortest fragment of a protected value that counts as part of it. Four
-#: characters is already short enough to occur in English by chance -- a
-#: value containing "secret" and "value" accumulated 55% coverage from a
-#: reply that merely used those words -- so a fragment must also be one the
-#: model could not have written without the value. `_is_incidental` decides
-#: that.
-MIN_FRAGMENT = 6
-
-#: How much of a protected value the fields may account for between them
-#: before this is treated as a leak. Not 100%: a value cut into pieces is
-#: still that value, and the model has no reason to emit most of one.
-MAX_VALUE_COVERAGE = 0.5
-
-
-#: Words a protected value may contain that a model could write without ever
-#: having seen it. A run made only of these is not evidence of anything: a
-#: reply saying "asks for the secret value" once covered 55% of a value
-#: containing both words and was flagged as a leak.
-#: How much of a protected value an ordinary-vocabulary run may cover before
-#: it stops counting as incidental. Above this the run is the value, not a
-#: word that happens to sit inside it.
-_INCIDENTAL_MAX_SHARE = 0.34
-
 _INCIDENTAL_WORDS = frozenset(
     {
         "secret",
@@ -310,130 +281,34 @@ _INCIDENTAL_WORDS = frozenset(
 )
 
 
-def _is_incidental(fragment: str, value_length: int) -> bool:
-    """Whether `fragment` is ordinary vocabulary *and* a small part of a value.
-
-    Checked against the squashed fragment, so it catches "secretvalue" as
-    readily as "secret". A fragment carrying anything else -- an identifier,
-    a hex run, a made-up word -- is evidence the model saw the value.
-
-    The length condition is what stops the exemption blinding a value that is
-    itself made of these words. A policy protecting "system-canary-token" had
-    every fragment exempted, so splitting it on its own word boundaries
-    evaded detection completely: the exemption is meant to ignore a word that
-    happens to appear inside a longer secret, not to license emitting a
-    secret one word at a time. A run that is a substantial share of the value
-    is the disclosure, whatever it is spelled from.
-    """
-    remaining = fragment
-    while remaining:
-        for word in _INCIDENTAL_WORDS:
-            if remaining.startswith(word):
-                remaining = remaining[len(word) :]
-                break
-        else:
-            return False
-    return True
-
-
 def _leaks_across_fields(judgement: CanonJudgement, protected_values: tuple[str, ...]) -> bool:
-    """Whether the fields together account for too much of a protected value.
+    """Whether the fields together disclose a protected value.
 
-    Coverage, not reassembly. Three earlier rules each asked whether the
-    fragments could be put back together, and each missed a split it was not
-    shaped for: a pairwise check misses a three-way split, one concatenation
-    misses fragments separated by an unrelated field, and checking every
-    ordering is factorial. A per-field run-length rule missed them too, since
-    a value cut three ways leaves fragments below any threshold safe enough
-    to use.
+    Deliberately simple, after a long detour. The concatenated prose fields
+    are checked with the project's own `redact`, which already squashes
+    whitespace and punctuation, so a value spelled with spacing inserted or
+    broken by a field boundary is still found -- and it is linear.
 
-    The question that does not depend on the split is how much of the value
-    the fields hold at all. Every run of at least `MIN_FRAGMENT` characters
-    of a protected value that appears in any field is marked off against that
-    value; if the marked positions exceed `MAX_VALUE_COVERAGE` of it, the
-    reply is treated as a leak however many fields it used. Matching runs on
-    the squashed projection makes it insensitive to spacing and punctuation,
-    as `redact` is.
+    What this gives up, and why that is the right trade: a value the model
+    split into fragments that are separated *in the concatenation* by other
+    text is not caught. Reaching those needed a coverage scan over every run
+    of every value, and eight successive versions of it each fixed one shape
+    and opened another -- an exponential extension loop, a scan that skipped
+    overlapping matches, a first-occurrence search that missed a field
+    holding the whole value, and two performance faults, the last of which
+    spent 2.2 seconds on a 60KB reply that a caller does not control.
+
+    The scenario being defended is also narrow. The canonicalizer's model
+    never receives protected values (`prompts.format_policies_summary` passes
+    labels and descriptions only, pinned by test), so for any of this to
+    matter the model must reconstruct a secret it was never shown and then
+    scatter it. Literal redaction of whole values is the guarantee that
+    carries weight, and it is unchanged. This is the layer beneath it, and a
+    simple linear layer that cannot be made to hang is worth more than an
+    elaborate one that keeps growing new failure modes.
     """
-    for value in protected_values:
-        target = squash(value)
-        if len(target) < MIN_FRAGMENT:
-            continue
-        if len(target) > MAX_SCANNED_VALUE:
-            # A value this long is not a secret a model could disclose by
-            # accident, and scanning it costs time proportional to its length
-            # on every reply. The literal redaction still covers it, and
-            # `redact` finds it however it is spaced; only the split-across-
-            # fields rule declines. The longest shipped value squashes to 38
-            # characters, so this is two orders of magnitude of headroom.
-            continue
-        covered = bytearray(len(target))
-        exempt = bytearray(len(target))
-        for text in _free_text(judgement):
-            haystack = squash(text)
-            if not haystack:
-                continue
-            start = 0
-            threshold = len(target) * MAX_VALUE_COVERAGE
-            while start <= len(target) - MIN_FRAGMENT:
-                # Stop as soon as the answer cannot change. Coverage only
-                # grows, so once it is past the threshold the remaining
-                # positions are work whose result is already known -- which
-                # is most of the work on exactly the inputs that are slow.
-                if sum(covered) > threshold:
-                    break
-                # Located once, then extended. Testing `target[start:end] in
-                # haystack` for every end restarts the search from the top of
-                # the field each time, which is a substring scan per character
-                # of the value: a 2,000-character value against an 80KB field
-                # took 7.4 seconds. Finding the shortest run once and walking
-                # forward from there compares single characters instead.
-                probe = target[start : start + MIN_FRAGMENT]
-                end = start + MIN_FRAGMENT
-                position = haystack.find(probe)
-                if position == -1:
-                    start += 1
-                    continue
-                # Every occurrence, not the first. Extending from the first
-                # match alone reported no leak for a field containing the
-                # entire value, because an earlier partial match stopped
-                # short: "ABCDEFzz ABCDEFGHIJKLMNOP" found "ABCDEF" at the
-                # front and never looked past it.
-                while position != -1:
-                    reach = start + MIN_FRAGMENT
-                    while (
-                        reach < len(target)
-                        and position + (reach - start) < len(haystack)
-                        and haystack[position + (reach - start)] == target[reach]
-                    ):
-                        reach += 1
-                    end = max(end, reach)
-                    if end >= len(target):
-                        break
-                    position = haystack.find(probe, position + 1)
-                end += 1
-                # Only a run that cannot be extended leftwards is counted.
-                # A sub-run of a longer match -- "ystemcanary" inside
-                # "systemcanary" -- is not a whole word, so the vocabulary
-                # exemption never recognised it and benign prose describing a
-                # policy read as a leak. Skipping such a run is not the same
-                # as skipping *past* it: advancing to the end of a match lost
-                # a second, overlapping fragment in the same field, so the
-                # scan still moves one character at a time.
-                maximal = start == 0 or target[start - 1 : end - 1] not in haystack
-                if end > start + MIN_FRAGMENT and maximal:
-                    fragment = target[start : end - 1]
-                    span = b"\x01" * (end - 1 - start)
-                    # An ordinary-vocabulary run is recorded separately
-                    # rather than counted, so that what the exemption hides
-                    # stays visible to anyone reading this.
-                    target_span = exempt if _is_incidental(fragment, len(target)) else covered
-                    target_span[start : end - 1] = span
-                start += 1
-        if sum(covered) > len(target) * MAX_VALUE_COVERAGE:
-            return True
-        del exempt
-    return False
+    joined = "".join(_free_text(judgement))
+    return redact(joined, protected_values) != joined
 
 
 def _blank_free_text(judgement: CanonJudgement) -> CanonJudgement:

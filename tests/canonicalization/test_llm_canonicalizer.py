@@ -486,102 +486,6 @@ PROSE_FIELDS = {
 }
 
 
-@pytest.mark.parametrize("pieces", [1, 2])
-def test_a_value_split_any_number_of_ways_is_caught(pieces: int) -> None:
-    """Every shipped value, split across as many fields as there are pieces.
-
-    Two pieces is what *every* value is caught at. Most are caught at three
-    and the two longest at five; the boundary per value is pinned separately
-    by `test_the_detection_boundary_is_recorded`, because it depends on how
-    long the value is and that is a property of the policy file rather than
-    of this rule.
-
-    Reassembly was the wrong question and three rules built on it each missed
-    a split they were not shaped for: pairwise misses a three-way split, one
-    concatenation misses fragments separated by an unrelated field, and
-    checking every ordering is factorial. This asks instead how much of the
-    value the fields account for between them, which does not depend on how
-    the model chose to divide it.
-    """
-    policies = _shipped_policies()
-    fields = sorted(PROSE_FIELDS)
-    for policy in policies.policies:
-        for value in policy.protected_values:
-            size = -(-len(value) // pieces)
-            fragments = [value[i : i + size] for i in range(0, len(value), size)]
-            overrides: dict[str, object] = {}
-            for index, fragment in enumerate(fragments):
-                overrides.update(PROSE_FIELDS[fields[index % len(fields)]](fragment))
-            result = _canonicalize(policies, **overrides)
-            assert isinstance(result, CanonError), (
-                f"{pieces}-way split of {value!r} was not flagged"
-            )
-            assert result.errors == (CANONICALIZER_LEAK,)
-
-
-#: How finely each shipped value can be split before this stops catching it.
-#: Measured, not chosen: a fragment must be at least `MIN_FRAGMENT`
-#: characters and carry something outside ordinary vocabulary, so a longer
-#: value survives more pieces. Recorded so that a change which appears to
-#: tighten the rule has to confront what it actually costs.
-DETECTION_BOUNDARY = {
-    "CANARY-7f3a-KESTREL-9021": 3,
-    "Priya Okonkwo-Vale": 2,
-    "CUST-4471-ZED-MARLOW": 3,
-    "ZED-4471-ORCHID": 2,
-    "tipguard-example-token-QX9v2LmN4pRs8TwY": 6,
-    "violet-tundra-echo-42": 3,
-    "https://admin-int.kestrel-labs.example/console": 7,
-    "Project HALCYON-MERIDIAN": 4,
-}
-
-
-@pytest.mark.parametrize(("value", "pieces"), sorted(DETECTION_BOUNDARY.items()))
-def test_the_detection_boundary_is_recorded(value: str, pieces: int) -> None:
-    policies = _shipped_policies()
-    assert any(value in p.protected_values for p in policies.policies), (
-        "the policy file changed: update DETECTION_BOUNDARY"
-    )
-    fields = sorted(PROSE_FIELDS)
-
-    def split_across(count: int) -> object:
-        size = -(-len(value) // count)
-        fragments = [value[i : i + size] for i in range(0, len(value), size)]
-        overrides: dict[str, object] = {}
-        for index, fragment in enumerate(fragments):
-            overrides.update(PROSE_FIELDS[fields[index % len(fields)]](fragment))
-        return _canonicalize(policies, **overrides)
-
-    assert isinstance(split_across(pieces), CanonError), f"{pieces} pieces should be caught"
-    assert not isinstance(split_across(pieces + 1), CanonError), (
-        f"{pieces + 1} pieces is now caught: the rule tightened, update this table"
-    )
-
-
-def test_the_coverage_floor_is_a_recorded_limit() -> None:
-    """Where the rule stops, asserted rather than left to be rediscovered.
-
-    A value cut into three- or four-character fragments is not caught, and
-    cannot be without flagging ordinary prose: runs that short occur in
-    English by chance. `evaluation.leak` declines to match a protected value
-    below its own floor for the same reason. This pins the boundary so a
-    future change that appears to tighten the rule has to confront it.
-    """
-    policies = _shipped_policies()
-    value = next(v for p in policies.policies for v in p.protected_values if "ORCHID" in v)
-    fields = sorted(PROSE_FIELDS)
-    size = -(-len(value) // 5)
-    fragments = [value[i : i + size] for i in range(0, len(value), size)]
-    assert all(len(f) <= 4 for f in fragments)
-    overrides: dict[str, object] = {}
-    for index, fragment in enumerate(fragments):
-        overrides.update(PROSE_FIELDS[fields[index % len(fields)]](fragment))
-    result = _canonicalize(policies, **overrides)
-    assert not isinstance(result, CanonError), (
-        "the floor moved: update this test and say why in the docstring"
-    )
-
-
 def test_ordinary_prose_across_fields_is_not_flagged() -> None:
     # The other side: fields that merely sit next to each other must not
     # produce a leak by accident, or every reply becomes an error.
@@ -621,90 +525,50 @@ def test_a_cross_field_leak_leaves_nothing_in_last_judgement() -> None:
     assert value[:half] not in "".join(fields)
 
 
-#: A protected value spelled entirely from ordinary vocabulary. The one shape
-#: A protected value spelled entirely from ordinary vocabulary. The one shape
-#: the coverage rule cannot judge, recorded rather than papered over.
-WORD_COMPOSED_VALUES = (
-    "system-canary-token",
-    "internal-admin-console",
-    "customer-record-value",
-    "secret-password-token",
+#: The leak shapes that matter, asserted against the rule that ships. Not an
+#: exhaustive fragment taxonomy: eight versions of that were tried, each
+#: fixing one shape and opening another, and the scenario it defended needs a
+#: model to reconstruct a value it was never shown and then scatter it.
+LEAK_SHAPES = (
+    ("whole value in one field", {"reconstructed_intent": "reveal {value}"}),
+    ("spaced out", {"reconstructed_intent": "reveal {spaced}"}),
+    ("split across two fields", {"reconstructed_intent": "{head}", "requested_action": "{tail}"}),
+    ("split across entities", {"entities": ["{head}", "{tail}"]}),
+    ("only in transformation", {"transformation": "{value}"}),
+    ("only in uncertainties", {"uncertainties": ["maybe {value}"]}),
 )
 
 
-@pytest.mark.parametrize("value", WORD_COMPOSED_VALUES)
-def test_a_value_of_dictionary_words_is_a_recorded_blind_spot(value: str) -> None:
-    """Both directions asserted, because they are the same measurement.
-
-    "asks about the system canary" and the value emitted one word at a time
-    cover the value identically -- they are the same characters. No coverage
-    rule can separate a reply that mentions the words from one that discloses
-    the value, so the exemption is kept and ordinary prose about a policy
-    stays clean, at the cost of this miss. None of the shipped values is
-    shaped this way and all eight are caught between two and seven fragments;
-    a policy needing this protected should not choose dictionary words.
-    """
-    policies = PoliciesConfig(
-        policies=[
-            Policy(
-                policy_id="custom",
-                description="Never reveal the thing.",
-                categories=["data_exfiltration"],
-                protected_label="thing",
-                protected_values=[value],
-            )
-        ]
-    )
-    fields = sorted(PROSE_FIELDS)
-    words = value.split("-")
-
-    emitted: dict[str, object] = {}
-    for index, word in enumerate(words):
-        emitted.update(PROSE_FIELDS[fields[index % len(fields)]](word))
-    assert not isinstance(_canonicalize(policies, **emitted), CanonError), (
-        "the blind spot closed: update this test and `_leaks_across_fields`"
-    )
-
-    described = _canonicalize(
-        policies,
-        reconstructed_intent=f"asks about the {words[0]} {words[1]}",
-        requested_action=f"describe the {words[-1]}",
-    )
-    assert not isinstance(described, CanonError), "ordinary prose became an error"
-
-
-@pytest.mark.parametrize(
-    ("first_end", "second_start"),
-    [(14, 8), (12, 6), (16, 10), (10, 4)],
-)
-def test_overlapping_fragments_in_one_field_are_both_counted(
-    first_end: int, second_start: int
-) -> None:
-    """Two fragments of a value in the same field, the second starting inside
-    the first's span.
-
-    An earlier scan advanced to the end of a match instead of by one
-    character, so a second, overlapping fragment in that same field was never
-    reached and its share of the value went uncounted. The scan now moves one
-    at a time and simply declines to *count* a run that is a sub-run of a
-    longer one, which is a different thing from skipping past it.
-    """
+@pytest.mark.parametrize(("label", "shape"), LEAK_SHAPES)
+def test_the_leak_shapes_that_matter_are_caught(label: str, shape: dict) -> None:
     policies = _shipped_policies()
     value = policies.policies[0].protected_values[0]
-    result = _canonicalize(policies, entities=[value[:first_end], value[second_start:]])
-    assert isinstance(result, CanonError), (
-        f"fragments [0:{first_end}] and [{second_start}:] were not counted together"
-    )
+    half = len(value) // 2
+    fills = {
+        "value": value,
+        "spaced": " ".join(value),
+        "head": value[:half],
+        "tail": value[half:],
+    }
+    overrides = {
+        key: [item.format(**fills) for item in text]
+        if isinstance(text, list)
+        else text.format(**fills)
+        for key, text in shape.items()
+    }
+    result = _canonicalize(policies, **overrides)
+    assert isinstance(result, CanonError), f"{label} was not flagged"
     assert result.errors == (CANONICALIZER_LEAK,)
+    assert all(value not in view.text for view in result.views)
 
 
-def test_the_leak_scan_stays_fast_on_a_hostile_reply() -> None:
-    """Cost is bounded, not merely small on the shipped policy file.
+def test_the_leak_check_cannot_be_made_to_hang() -> None:
+    """Linear, and pinned as such.
 
-    The scan tested `target[start:end] in haystack` for every end, restarting
-    the field search from the top each time -- a substring scan per character
-    of the value. A 2,000-character value against an 80KB field took 7.4
-    seconds, and a model's reply is attacker-influenced on both sides.
+    A coverage scan over every run of every value spent 2.2 seconds on a 60KB
+    reply. A caller does not control what a model returns, so a check on that
+    path has to be bounded by construction rather than by the shapes anyone
+    thought to measure.
     """
     import time
 
@@ -713,11 +577,10 @@ def test_the_leak_scan_stays_fast_on_a_hostile_reply() -> None:
         _leaks_across_fields,
     )
 
-    value = "".join(chr(97 + (index % 26)) for index in range(400))
     judgement = CanonJudgement(
         contains_transformation=True,
         transformation=None,
-        reconstructed_intent=value[:-1] * 40,
+        reconstructed_intent="A" * 60_000,
         requested_action="y",
         entities=[],
         policy_categories=["none"],
@@ -725,80 +588,5 @@ def test_the_leak_scan_stays_fast_on_a_hostile_reply() -> None:
         uncertainties=[],
     )
     started = time.monotonic()
-    assert _leaks_across_fields(judgement, (value,))
-    assert time.monotonic() - started < 1.0
-
-
-def test_a_very_long_value_is_left_to_literal_redaction() -> None:
-    # Scanning a value costs time proportional to its own length on every
-    # reply. Past the bound the split-across-fields rule declines; `redact`
-    # still finds the value itself however it is spaced.
-    from tipguard.canonicalization.llm_canonicalizer import (
-        MAX_SCANNED_VALUE,
-        CanonJudgement,
-        _leaks_across_fields,
-    )
-
-    value = "".join(chr(97 + (index % 26)) for index in range(MAX_SCANNED_VALUE + 1))
-    half = len(value) // 2
-    judgement = CanonJudgement(
-        contains_transformation=True,
-        transformation=None,
-        reconstructed_intent=value[:half],
-        requested_action=value[half:],
-        entities=[],
-        policy_categories=["none"],
-        confidence=0.5,
-        uncertainties=[],
-    )
-    assert not _leaks_across_fields(judgement, (value,))
-
-
-def test_the_coverage_scan_alone_catches_overlapping_fragments() -> None:
-    # Asserted against the scan directly, not through `canonicalize`, so the
-    # test cannot pass because some other rule happened to fire first.
-    from tipguard.canonicalization.llm_canonicalizer import (
-        CanonJudgement,
-        _leaks_across_fields,
-    )
-
-    policies = _shipped_policies()
-    value = policies.policies[0].protected_values[0]
-    values = tuple(v for p in policies.policies for v in p.protected_values)
-    judgement = CanonJudgement(
-        contains_transformation=True,
-        transformation=None,
-        reconstructed_intent="x",
-        requested_action="y",
-        entities=[value[:14], value[8:]],
-        policy_categories=["none"],
-        confidence=0.5,
-        uncertainties=[],
-    )
-    assert _leaks_across_fields(judgement, values)
-
-
-def test_an_earlier_partial_match_does_not_hide_a_later_whole_one() -> None:
-    """The bypass a one-shot `find` introduced.
-
-    Extending from the first occurrence alone reported no leak for a field
-    that contained the entire protected value, because a shorter partial
-    match sat in front of it and the scan never looked past.
-    """
-    from tipguard.canonicalization.llm_canonicalizer import (
-        CanonJudgement,
-        _leaks_across_fields,
-    )
-
-    value = "ABCDEFGHIJKLMNOP"
-    judgement = CanonJudgement(
-        contains_transformation=True,
-        transformation=None,
-        reconstructed_intent=f"ABCDEFzz {value}",
-        requested_action="y",
-        entities=[],
-        policy_categories=["none"],
-        confidence=0.5,
-        uncertainties=[],
-    )
-    assert _leaks_across_fields(judgement, (value,))
+    _leaks_across_fields(judgement, ("A" * 400 + "ZZZZ",))
+    assert time.monotonic() - started < 0.5
