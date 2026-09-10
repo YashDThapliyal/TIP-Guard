@@ -144,3 +144,42 @@ def test_the_sweep_at_the_threshold_as_run_matches_the_arm_it_swept(generated: s
         f"sweep at {DEFAULT_THRESHOLD} says {swept_detection} while the arm reports "
         f"{arm_detection}; the sweep is not measuring the same quantity"
     )
+
+
+#: Every place the report states which threshold the arms ran at. Each pattern
+#: must capture that threshold as group 1.
+#:
+#: The report is hand-written prose, so these claims are not generated from
+#: anything and nothing else checks them. Making the *script* read
+#: `DEFAULT_THRESHOLD` fixed the tables it prints and left this untouched --
+#: with the default changed to 0.55, every other test here passed while the
+#: report went on claiming 0.50 was shipped, which is precisely the mislabel
+#: those tests were added to prevent.
+AS_RUN_CLAIMS = (
+    r"a single threshold of (\d\.\d{2})",
+    r"\|\s*(\d\.\d{2}) \(\*\*as run\*\*\)",
+    r"incl\. (\d\.\d{2}) \*\*as run\*\*",
+    r"Moving v2 from (\d\.\d{2}) to",
+)
+
+
+def test_the_report_names_the_threshold_the_code_actually_defaults_to() -> None:
+    """The report's "as run" claims must match `DEFAULT_THRESHOLD`.
+
+    No study config sets `input_threshold`, so that constant *is* the
+    threshold every arm ran at. If it changes and the report does not, the
+    report misstates its own operating point -- and because the classifier's
+    scores are coarse, the rates can be identical either side of the change,
+    so no value comparison would notice.
+    """
+    text = REPORT.read_text(encoding="utf-8")
+    expected = f"{DEFAULT_THRESHOLD:.2f}"
+    found: list[tuple[str, str]] = []
+    for pattern in AS_RUN_CLAIMS:
+        matches = re.findall(pattern, text)
+        assert matches, f"the report no longer states the threshold in the form {pattern!r}"
+        found.extend((pattern, m) for m in matches)
+    wrong = [(p, m) for p, m in found if m != expected]
+    assert not wrong, (
+        f"the report claims a different threshold than the code defaults to ({expected}): {wrong}"
+    )
