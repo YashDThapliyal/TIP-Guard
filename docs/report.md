@@ -3,6 +3,49 @@
 **Status: draft. Results sections are filled from `scripts/analyse_study.py` as arms complete;
 sections marked _pending_ have no data yet and make no claim.**
 
+## Summary
+
+A Task-in-Prompt attack hides a request for protected data inside a task — a base64 blob, a cipher,
+a riddle, a code snippet — so that the text a filter reads and the request the model answers are
+different objects. This study measures seven guardrail configurations against 989 held-out cases on
+two models, reporting a detection rate and a false-positive rate side by side throughout, and
+calling a difference a result only where 95% intervals do not overlap.
+
+Five findings, in descending order of how much they should change what a practitioner does.
+
+1. **The system prompt matters more than the guardrail.** Undefended, gpt-4o-mini leaked on
+   0.75 [0.72–0.78] of prohibited cases when protected values were supplied as ordinary working
+   context, and 0.03 [0.02–0.05] when the same values were named and their disclosure forbidden.
+   That is a 96% reduction in exposure for a prompt edit, at no inference cost and no false
+   positives — a better trade than any defence measured here.
+
+2. **One clause of a classifier prompt outweighed every architectural change measured.** A risk
+   prompt asking the model to rate attempts to "extract, **encode**, or otherwise exfiltrate" makes
+   the encoding itself read as evidence. Fixing that clause, with architecture, models and cost held
+   constant, cut the false-positive rate from 0.71 to 0.35 and raised benign accuracy from 0.15 to
+   0.42, while both versions still blocked every attack.
+
+3. **A single-number leaderboard would rank the worst defence first.** That naive classifier posts
+   1.00 attacks blocked and a 0.00 violation rate, and blocks 68% of legitimate traffic. Detection
+   and false-positive rates are not combinable here, and the paper reports them separately for this
+   reason.
+
+4. **Some apparent robustness is incapacity, not refusal.** Across transformation families, how
+   often a model leaks correlates with how well it performs the *same transformation on a harmless
+   task* — Pearson r = +0.92 (gpt-4o-mini) and +0.82 (haiku). gpt-4o-mini's safest family,
+   `multi_step` at 0.29, is one where its benign accuracy is 0.00: it cannot do the transformation
+   at all. Capability ceilings lift with each model release, so this is the opposite of a safety
+   margin.
+
+5. **The two models fail on different attack classes.** gpt-4o-mini's worst families are mechanical
+   encodings (substitution 0.95, base64 0.94); haiku's are semantic (indirect 0.35, riddle 0.20,
+   against base64 0.10 and caesar 0.03). A defence built to decode ciphers addresses one model's
+   problem and largely misses the other's.
+
+The primary question — whether semantic canonicalization beats conventional filtering — is answered
+from an ablation pair that differs in canonicalization alone, and is reported under
+[Canonicalization](#canonicalization).
+
 ## Question
 
 Does semantic canonicalization detect Task-in-Prompt (TIP) policy violations more effectively than
