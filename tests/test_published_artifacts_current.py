@@ -428,11 +428,14 @@ COLD_WORDS = frozenset({"cold", "reproduc", "from scratch"})
 #: "$6.0", so a false claim in either form passed unread.
 _MONEY = re.compile(r"\$\s?(\d+(?:\.\d+)?)")
 
-#: Money spelled out in words. The README must quote costs as numerals, so
-#: this is forbidden outright rather than parsed: "twenty dollars in total"
-#: also passed unread, and enumerating number words to catch it would be a
-#: worse check than requiring precision in the first place.
-_WORDED_MONEY = re.compile(r"\b([a-z]+)\s+dollars?\b", re.IGNORECASE)
+#: Money written without a `$`. Costs must carry the sign so `_MONEY` reads
+#: them and can check them against the artifacts, so every other spelling is
+#: refused rather than parsed.
+#:
+#: The token before the unit is `\S+`, not `[a-z]+`. Requiring letters caught
+#: "twenty dollars" and missed "20 dollars" and "6.06 dollars", which is the
+#: same claim in the form a report is more likely to use.
+_UNSIGNED_MONEY = re.compile(r"\b(\S+)\s+(?:dollars?|USD)\b", re.IGNORECASE)
 
 
 #: A figure's claim is the sentence it sits in. A fixed character window is
@@ -523,8 +526,8 @@ def test_the_readme_states_both_costs_correctly() -> None:
         f"nor the billed spend (${billed:.2f}): {unexplained}"
     )
 
-    worded = _WORDED_MONEY.findall(text)
-    assert not worded, (
-        f"the README states a cost in words: {sorted(set(worded))} dollars. Costs must be "
-        "numerals so they can be checked against the artifacts."
+    unsigned = _UNSIGNED_MONEY.findall(text)
+    assert not unsigned, (
+        f"the README states a cost without a $ sign: {sorted(set(unsigned))}. Costs must be "
+        "written as $N so they can be checked against the artifacts."
     )
