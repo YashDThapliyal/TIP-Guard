@@ -44,6 +44,7 @@ MARKERS = Path("artifacts/study-v1/markers")
 STUDY_CONFIGS = Path("experiments/study")
 DATASET = Path("data/generated/tipguard-v1.jsonl")
 REPORT = Path("docs/report.md")
+README = Path("README.md")
 
 #: The splits a result may be reported on. `train` and `dev` exist for tuning,
 #: so measuring on them would report performance on data a defence was fitted
@@ -292,6 +293,8 @@ def _legitimate_case_counts() -> dict[int, str]:
         of_type("tip", "direct"): "prohibited cases",
         of_type("benign_transformation", "hard_negative"): "benign and hard-negative cases",
         of_type("benign_transformation"): "benign transformations",
+        of_type("hard_negative"): "hard negatives",
+        of_type("tip"): "disguised attacks",
         of_type("direct"): "direct cases",
     }
     review = Path("data/labels/gold-review.jsonl")
@@ -375,3 +378,41 @@ class _Absent:
 class _EmptyCache:
     def get(self, key: str) -> ModelResponse | None:
         return None
+
+
+def test_every_case_count_in_the_readme_is_current() -> None:
+    """The README carries results too, so its counts need the same check.
+
+    It was rewritten as a short research report with two figures, which means
+    it now quotes population sizes in prose. Nothing checked those: the count
+    test above reads `docs/report.md` only, and the figures are generated from
+    the artifacts while the sentences around them are typed by hand.
+    """
+    text = README.read_text(encoding="utf-8")
+    legitimate = _legitimate_case_counts()
+    quoted = _quoted_counts(text)
+    assert quoted, "found no case-count claims in the README; the pattern is probably wrong"
+    stale = sorted(n for n in quoted if n not in legitimate and n not in PILOT_SAMPLE_SIZES)
+    assert not stale, (
+        f"the README quotes case counts that match nothing on disk: {stale}. Legitimate counts "
+        f"are {', '.join(f'{n} ({what})' for n, what in sorted(legitimate.items()))}"
+    )
+
+
+def test_the_readme_figures_exist_and_are_generated_from_the_artifacts() -> None:
+    """A README that shows charts should not be able to reference missing ones,
+    and the script that draws them should be discoverable from the page."""
+    text = README.read_text(encoding="utf-8")
+    referenced = sorted(set(re.findall(r"\((docs/figures/[\w.-]+)\)", text)))
+    assert referenced, "the README references no figures"
+    for path in referenced:
+        assert Path(path).is_file(), f"the README shows {path}, which does not exist"
+    assert "scripts/make_figures.py" in text, (
+        "the README shows figures without saying how to regenerate them"
+    )
+
+
+def test_the_readme_avoids_em_dashes() -> None:
+    """A house style rule, checked rather than remembered."""
+    text = README.read_text(encoding="utf-8")
+    assert "\u2014" not in text, "the README contains an em dash"

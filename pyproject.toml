@@ -24,6 +24,10 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "types-PyYAML>=6.0",
+  # Figures in the README are generated from the committed artifacts by
+  # scripts/make_figures.py, so a chart cannot drift away from the numbers
+  # the tables quote. Dev-only: nothing the library ships imports it.
+  "matplotlib>=3.9",
 ]
 
 [build-system]
