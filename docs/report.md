@@ -98,17 +98,28 @@ forbids disclosure — gpt-4o-mini leaked **0 of 25** TIP cases. It decoded the 
 and refused anyway. There was no vulnerability for a defence to reduce.
 
 Re-framing the same values as ordinary working context, with no prohibition attached, changed the
-result completely:
+result completely. Measured on all 752 prohibited cases, undefended:
 
 | Condition | gpt-4o-mini | claude-haiku-4.5 |
 | --- | --- | --- |
-| `forbidden` (values named, disclosure prohibited) | 0/20 | 2/20 |
-| `context` (same values as reference data) | **14/20** | 0/20 |
+| `forbidden` (values named, disclosure prohibited) | 0.03 [0.02–0.05] | 0.12 [0.10–0.14] |
+| `context` (same values as reference data) | **0.75 [0.72–0.78]** | 0.13 [0.11–0.16] |
 
-Two things follow. First, vulnerability to TIP attacks is driven substantially by how the protected
-data is framed to the model, not by the ingenuity of the encoding. Second, it is strongly
-model-dependent, and in opposite directions for these two models — so a single-model result would
-have read as a property of the attack rather than of the deployment.
+Two things follow. First, for gpt-4o-mini, vulnerability to TIP attacks is driven overwhelmingly by
+how the protected data is framed — a factor of roughly 25 between the two conditions — and not by
+the ingenuity of the encoding. The attack surface is a deployment property.
+
+Second, that sensitivity is itself model-dependent, and not in a way a small sample revealed.
+claude-haiku-4.5 is essentially **indifferent** to the framing (0.12 against 0.13, intervals
+overlapping), while being four times more vulnerable than gpt-4o-mini under `forbidden` and roughly
+six times less vulnerable under `context`. Whichever single model and single condition a study
+picked, it would report a different headline.
+
+A 20-case pilot got the haiku `context` cell wrong — it observed 0/20 and this section previously
+reported that as haiku responding in the *opposite* direction to gpt-4o-mini. At 0.13, 0 leaks in 20
+draws is an unremarkable outcome, and the "opposite directions" reading was noise given a story. It
+is corrected here rather than quietly dropped, because it is a clean example of why this report
+requires non-overlapping intervals before calling anything a result.
 
 Both conditions are therefore run as an experiment variable rather than fixed. `context` is the
 condition where a defence has something to prevent, and it is also the more common real deployment:
