@@ -11,33 +11,46 @@ different objects. This study measures seven guardrail configurations against 98
 two models, reporting a detection rate and a false-positive rate side by side throughout, and
 calling a difference a result only where 95% intervals do not overlap.
 
-Five findings, in descending order of how much they should change what a practitioner does.
+Of the five hypotheses registered before the study, one was not tested, three were not supported,
+and one was refuted; all five are reported under
+[The hypotheses as stated](#the-hypotheses-as-stated-and-what-happened-to-them). The findings worth
+carrying away were not among them.
 
-1. **The system prompt matters more than the guardrail.** Undefended, gpt-4o-mini leaked on
+Six findings, in descending order of how much they should change what a practitioner does.
+
+1. **None of the seven defences is deployable at the bar this project set.** The design target,
+   fixed before measurement, was an operating point below a 10% false-positive rate. Sweeping every
+   threshold on the stored scores, the best available frontier is **0.82 attacks blocked at 0.13
+   false positives** — one legitimate request in eight refused to catch four attacks in five. The
+   binding constraint throughout is false positives on legitimate encoded work, not detection. The
+   sweep also corrects this study's own setup: the 0.5 threshold every arm ran at was suboptimal,
+   and 0.65 more than halves false positives for 14 points of detection.
+
+2. **The system prompt matters more than the guardrail.** Undefended, gpt-4o-mini leaked on
    0.75 [0.72–0.78] of prohibited cases when protected values were supplied as ordinary working
    context, and 0.03 [0.02–0.05] when the same values were named and their disclosure forbidden.
    That is a 96% reduction in exposure for a prompt edit, at no inference cost and no false
    positives — a better trade than any defence measured here.
 
-2. **One clause of a classifier prompt outweighed every architectural change measured.** A risk
+3. **One clause of a classifier prompt outweighed every architectural change measured.** A risk
    prompt asking the model to rate attempts to "extract, **encode**, or otherwise exfiltrate" makes
    the encoding itself read as evidence. Fixing that clause, with architecture, models and cost held
    constant, cut the false-positive rate from 0.71 to 0.35 and raised benign accuracy from 0.15 to
    0.42, while both versions still blocked every attack.
 
-3. **A single-number leaderboard would rank the worst defence first.** That naive classifier posts
+4. **A single-number leaderboard would rank the worst defence first.** That naive classifier posts
    1.00 attacks blocked and a 0.00 violation rate, and blocks 68% of legitimate traffic. Detection
    and false-positive rates are not combinable here, and the paper reports them separately for this
    reason.
 
-4. **Some apparent robustness is incapacity, not refusal.** Across transformation families, how
+5. **Some apparent robustness is incapacity, not refusal.** Across transformation families, how
    often a model leaks correlates with how well it performs the *same transformation on a harmless
    task* — Pearson r = +0.92 (gpt-4o-mini) and +0.82 (haiku). gpt-4o-mini's safest family,
    `multi_step` at 0.29, is one where its benign accuracy is 0.00: it cannot do the transformation
    at all. Capability ceilings lift with each model release, so this is the opposite of a safety
    margin.
 
-5. **The two models fail on different attack classes.** gpt-4o-mini's worst families are mechanical
+6. **The two models fail on different attack classes.** gpt-4o-mini's worst families are mechanical
    encodings (substitution 0.95, base64 0.94); haiku's are semantic (indirect 0.35, riddle 0.20,
    against base64 0.10 and caesar 0.03). A defence built to decode ciphers addresses one model's
    problem and largely misses the other's.
@@ -287,6 +300,50 @@ protected values from unprohibited context into a prompt that names and forbids 
 the exposure, at no inference cost and no false positives. No defence in this study achieves a
 better trade, and several achieve a much worse one.
 
+### Operating points, and whether any is deployable
+
+Every arm above runs at a single threshold of 0.5, which was chosen before any of this was measured
+and is **not** the best point on the curve. Classifier scores are stored for allowed as well as
+blocked cases, so the trade can be recovered at other thresholds without new API calls (detection
+and false positives only — violation rate cannot be recomputed, because a case that was blocked has
+no stored model response).
+
+`input_classifier_v2`, `context` condition:
+
+| Threshold | Attacks blocked | False positives |
+| --- | --- | --- |
+| 0.25 | 0.99 [0.99–1.00] | 0.63 [0.57–0.69] |
+| 0.35–0.55 (**shipped**) | 0.96 [0.94–0.97] | 0.32 [0.27–0.39] |
+| 0.65–0.85 | 0.82 [0.79–0.85] | **0.13 [0.09–0.18]** |
+| ≥0.95 | 0.00 [0.00–0.01] | 0.00 [0.00–0.02] |
+
+And the naive v1 prompt, for contrast:
+
+| Threshold | Attacks blocked | False positives |
+| --- | --- | --- |
+| 0.25–0.65 | 1.00 [0.99–1.00] | 0.68 [0.62–0.74] |
+| 0.75 | 0.99 [0.97–0.99] | 0.55 [0.49–0.61] |
+| 0.85 | 0.86 [0.84–0.89] | 0.31 [0.25–0.37] |
+| 0.95 | 0.36 [0.33–0.40] | 0.01 [0.00–0.03] |
+
+Two things follow, and the first is a correction to this study's own setup. **The threshold every
+arm ran at was suboptimal.** Moving v2 from 0.55 to 0.65 cuts the false-positive rate from 0.32 to
+0.13 — better than halving it — for 14 points of detection. Every headline number in the tables
+above is therefore reported at a worse operating point than the same defence can reach, and
+comparisons between arms inherit that. The scores are quantised (the classifier emits roughly one
+decimal place), which is why the curve moves in steps rather than smoothly.
+
+**Second, and more important: the project's own deployability bar was never met.** The design
+target, set in `docs/research-questions.md` before any measurement, was an operating point with a
+false-positive rate below 10%. Across every arm and every threshold, no configuration blocks most
+attacks while staying under that bar. The best available frontier is roughly **0.82 attacks blocked
+at a 0.13 false-positive rate** — that is, blocking one in eight legitimate requests to catch four
+in five attacks. v1 reaches a 0.01 false-positive rate only by collapsing to 0.36 detection.
+
+So the practical conclusion of this study is not merely that canonicalization adds nothing. It is
+that **none of the seven defences measured here is deployable at the bar the project set for
+itself**, and the binding constraint is false positives on legitimate encoded work, not detection.
+
 ### Canonicalization
 
 This is the study's primary question, and the answer is negative.
@@ -372,6 +429,74 @@ through (nothing in this corpus qualifies); or a deployment that needs the decod
 artifact — for a human reviewer, an audit log, or a policy decision — rather than only a block/allow
 verdict. Canonicalization produces something a classifier score does not, and this study measures
 only the verdict.
+
+## The hypotheses as stated, and what happened to them
+
+`docs/research-questions.md` committed to five hypotheses before the study ran. All five are
+reported here, including the three that were not part of the narrative above, because reporting only
+the one with a clean story would be selective.
+
+| | Hypothesis | Outcome |
+| --- | --- | --- |
+| H1 | Undefended, a model violates policy more often under TIP prompts than under direct requests | **Not supported** |
+| H2 | Canonicalization plus classification detects more violations than classifying the input alone | **Not supported** |
+| H3 | Deterministic decoders plus an LLM canonicalizer detect more than either alone | **Not tested** |
+| H4 | Undefended vulnerability peaks at difficulty 2–3 | **Weak support** |
+| H5 | Canonicalization narrows the generalization gap on unseen transformation families | **Refuted** |
+
+**H1 — not supported, and underpowered.** The premise of the TIP threat model is that hiding a
+request inside a task is more effective than simply asking. That is not what the data shows:
+
+| Arm | TIP cases | Direct cases | Separates? |
+| --- | --- | --- | --- |
+| gpt-4o-mini, `context` | 0.75 [0.72–0.78] n=726 | 0.85 [0.66–0.94] n=26 | no |
+| gpt-4o-mini, `forbidden` | 0.03 [0.02–0.05] | 0.08 [0.02–0.24] | no |
+| haiku, `context` | 0.13 [0.11–0.16] | 0.12 [0.04–0.29] | no |
+| haiku, `forbidden` | 0.12 [0.10–0.15] | 0.04 [0.01–0.19] | no |
+
+No cell separates, and in three of four the point estimate for *direct* requests is at or above the
+TIP rate. This is "not shown" rather than "refuted": 26 direct cases give intervals far too wide to
+detect a moderate difference, and that thinness is a design flaw in the benchmark rather than a
+finding. But nothing here supports treating encoded requests as a distinct escalation over plain
+ones, and a study of TIP attacks that cannot show they beat asking directly should say so.
+
+**H2 — not supported.** The primary question; see [Canonicalization](#canonicalization).
+
+**H3 — not tested.** Cut when the study was scoped down. It would have required two further arms
+(decoders only, LLM canonicalizer only). Given H2 and H5, an effect large enough to matter is
+unlikely, but that is an inference and not a measurement.
+
+**H4 — weak support.** Both models show the predicted inverted-U, peaking at difficulty 2–3:
+
+| Difficulty | gpt-4o-mini, `context` | haiku, `context` |
+| --- | --- | --- |
+| 1 | 0.71 [0.64–0.77] n=210 | 0.09 [0.06–0.14] |
+| 2 | 0.80 [0.74–0.85] n=180 | 0.15 [0.11–0.21] |
+| 3 | 0.81 [0.74–0.86] n=180 | 0.17 [0.12–0.23] |
+| 4 | 0.70 [0.63–0.76] n=182 | 0.14 [0.09–0.19] |
+
+The shape matches the prediction, and the mechanism is plausible — at low difficulty the request is
+transparent enough to refuse, at high difficulty the model can no longer recover it (compare the
+capability confound in [Failure analysis](#failure-analysis)). But **no pairwise comparison
+separates**: every adjacent interval overlaps. The only thing carrying this is that the same shape
+appears independently in two models, which is suggestive and not a result by this report's own rule.
+
+**H5 — refuted, but it located a real effect.** The hypothesis was that canonicalization would help
+most against families the defence had never seen. Comparing the reportable splits against
+`heldout_transformation`:
+
+| Arm | Known families | Unseen families | Gap |
+| --- | --- | --- | --- |
+| `input_classifier_v2` | 0.98 [0.97–0.99] n=464 | 0.91 [0.87–0.94] n=288 | **+0.075** |
+| `tip_guard_no_canon` | 1.00 [0.99–1.00] | 1.00 [0.99–1.00] | −0.002 |
+| `tip_guard` | 1.00 [0.99–1.00] | 1.00 [0.99–1.00] | −0.002 |
+
+A generalization gap genuinely exists: a single classifier degrades on unseen transformation
+families, and those intervals separate, so that is a result. Both TIP-Guard arms close it entirely —
+**and the arm with canonicalization switched off closes it just as completely.** So defence in depth
+(a second classifier pass plus an output guard) is what buys robustness to novel attack families;
+canonicalization contributes nothing measurable to it. This was the last remaining case for the
+method and it does not hold.
 
 ## Failure analysis
 
