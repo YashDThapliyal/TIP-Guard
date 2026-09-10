@@ -89,6 +89,7 @@ def test_an_unknown_model_alias_is_a_config_error(
     [
         "enable_detector",
         "enable_decoders",
+        "enable_code_analyzer",
         "enable_llm_canonicalizer",
         "enable_original_classifier",
         "enable_output_guard",
@@ -240,55 +241,80 @@ def test_an_unknown_prompt_version_fails_the_tip_guard_build(
         )
 
 
-def test_the_discarded_code_analyzer_switch_is_refused(
+def test_the_code_analyzer_switch_actually_disables_code_analysis(
     registry: ProviderRegistry, policies: PoliciesConfig
 ) -> None:
-    """`enable_code_analyzer` was accepted and then ignored.
+    """`enable_code_analyzer` was accepted, parsed and discarded.
 
-    Code analysis reaches a snippet through `DeterministicCanonicalizer`,
-    which constructs its own `RestrictedCodeAnalyzer`, so the switch could not
-    disable anything. That was merely useless until manifests began recording
-    resolved parameters -- at which point a config setting it would have been
-    told, in the run's own record, that an ablation took effect which did not.
-    Refusing it is the honest behaviour.
-    """
-    with pytest.raises(ConfigError, match="unknown params"):
-        build_guardrail(
-            DefenseConfig(name="tip_guard", params={"enable_code_analyzer": False}),
-            registry,
-            "mock-main",
-            policies,
-        )
+    Code analysis reached a snippet through `DeterministicCanonicalizer`,
+    which built its own analyser, so nothing the switch said could take
+    effect. That was merely useless until manifests began recording resolved
+    parameters -- at which point a config setting it would have had an
+    ablation that never happened written into the run's own record.
 
-
-def test_code_analysis_still_runs_for_a_code_case(
-    registry: ProviderRegistry, policies: PoliciesConfig
-) -> None:
-    """The reason the switch cannot be honoured: analysis is not optional.
-
-    If this ever stops decoding, the switch could be reinstated as a real
-    ablation -- and this test is what would say so.
+    Asserted on a real `code` case rather than on the object graph, because
+    the previous version of this switch would have passed any check that only
+    looked at how the pipeline was assembled.
     """
     from pathlib import Path as _Path
 
     from tipguard.benchmark.io import load_cases
 
-    guard = build_guardrail(
-        DefenseConfig(
-            name="tip_guard",
-            params={"classifier_model": "mock-judge", "enable_llm_canonicalizer": "false"},
-        ),
-        registry,
-        "mock-main",
-        policies,
-    )
-    assert isinstance(guard, TIPGuard)
     case = next(
         c
         for c in load_cases(_Path("data/generated/tipguard-v1.jsonl"))
         if c.transformation == "code"
     )
-    canonical = guard._canonicalizer.run(case.prompt)
-    assert any(view.source == "deterministic:code" for view in canonical.views), (
-        "no code view produced; code analysis may have become optional"
+
+    def code_views(enabled: bool) -> tuple[str, ...]:
+        guard = build_guardrail(
+            DefenseConfig(
+                name="tip_guard",
+                params={
+                    "classifier_model": "mock-judge",
+                    "enable_llm_canonicalizer": "false",
+                    "enable_code_analyzer": "true" if enabled else "false",
+                },
+            ),
+            registry,
+            "mock-main",
+            policies,
+        )
+        assert isinstance(guard, TIPGuard)
+        return tuple(view.source for view in guard._canonicalizer.run(case.prompt).views)
+
+    assert "deterministic:code" in code_views(enabled=True), (
+        "code analysis produced no view while enabled; the ablation cannot be measured"
     )
+    assert not code_views(enabled=False), (
+        "code analysis still produced a view while disabled, so the switch is a recorded "
+        "preference rather than an ablation"
+    )
+
+
+def test_the_code_ablation_applies_mid_peel_too(
+    registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """A code layer can appear inside a multi-step payload.
+
+    Checking the switch only at the single-family entry point would leave the
+    analyser running on inner layers while the run recorded it as disabled,
+    which is the same misreport one level down.
+    """
+    from pathlib import Path as _Path
+
+    from tipguard.benchmark.io import load_cases
+    from tipguard.canonicalization.deterministic import _decode_single_layer
+    from tipguard.canonicalization.types import Family
+
+    # A real case's prompt, because `_decode_code_text` extracts the snippet
+    # from surrounding prose and a bare snippet is not in the form it reads.
+    prompt = next(
+        c.prompt
+        for c in load_cases(_Path("data/generated/tipguard-v1.jsonl"))
+        if c.transformation == "code"
+    )
+    assert _decode_single_layer(prompt, Family.CODE, analyze_code=True) is not None, (
+        "the fixture prompt no longer decodes, so this proves nothing"
+    )
+    assert _decode_single_layer(prompt, Family.CODE, analyze_code=False) is None

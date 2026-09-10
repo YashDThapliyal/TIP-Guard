@@ -224,7 +224,17 @@ _SINGLE_LAYER_DECODERS: dict[Family, Callable[[str], str | None]] = {
 }
 
 
-def _decode_single_layer(text: str, family: Family) -> str | None:
+def _decode_single_layer(text: str, family: Family, *, analyze_code: bool = True) -> str | None:
+    """Peel one layer of `family`, or return None if it cannot be peeled.
+
+    `analyze_code` exists so the code path can be ablated. It is threaded
+    rather than checked once at the entry point because a code layer can turn
+    up mid-peel: a multi-step payload whose inner layer is a snippet would
+    otherwise still be analysed while the run recorded the analyser as
+    disabled.
+    """
+    if family is Family.CODE and not analyze_code:
+        return None
     decoder = _SINGLE_LAYER_DECODERS.get(family)
     return decoder(text) if decoder is not None else None
 
@@ -300,7 +310,9 @@ def _best_letters_layer(text: str) -> str | None:
     return best[0] if best is not None else None
 
 
-def _peel_remaining_layers(text: str, rounds: int = MAX_MULTI_STEP_ROUNDS - 1) -> str:
+def _peel_remaining_layers(
+    text: str, rounds: int = MAX_MULTI_STEP_ROUNDS - 1, *, analyze_code: bool = True
+) -> str:
     """Keep peeling `text` while it still looks encoded.
 
     Shared by the single-family path and the multi-step loop so the two
@@ -313,7 +325,7 @@ def _peel_remaining_layers(text: str, rounds: int = MAX_MULTI_STEP_ROUNDS - 1) -
             return current
         family = first_layer_family(current)
         peeled = (
-            _decode_single_layer(current, family)
+            _decode_single_layer(current, family, analyze_code=analyze_code)
             if family is not None
             else _best_letters_layer(current)
         )
@@ -327,10 +339,19 @@ class DeterministicCanonicalizer:
     """Recovers the plaintext instruction a detected transformation wrapped.
 
     See the module docstring for the substitution ruling, the return-value
-    contract, and the no-logging guarantee. Stateless: every method reads
-    only its arguments, so one instance is safe to reuse or share across
-    calls.
+    contract, and the no-logging guarantee. Reads only its arguments and its
+    one construction-time setting, so an instance is safe to reuse or share
+    across calls.
+
+    `analyze_code` ablates the code path: with it off, a snippet is left as
+    written and no code view is produced. It is a real switch rather than a
+    recorded preference -- `tip_guard`'s `enable_code_analyzer` was accepted
+    and discarded for exactly as long as this argument did not exist, which
+    meant a run could record an ablation that never happened.
     """
+
+    def __init__(self, analyze_code: bool = True) -> None:
+        self._analyze_code = analyze_code
 
     def canonicalize(self, text: str, detection: DetectionResult) -> tuple[CanonicalView, ...]:
         if not detection.has_transformation or detection.family is None:
@@ -341,7 +362,7 @@ class DeterministicCanonicalizer:
             # No mechanical inverse exists for these; a later, semantic
             # canonicalizer is the only thing that can produce a view here.
             return ()
-        decoded = _decode_single_layer(text, detection.family)
+        decoded = _decode_single_layer(text, detection.family, analyze_code=self._analyze_code)
         if decoded is None:
             return ()
         # Peeling one layer is not the same as finishing. A layered payload
@@ -353,7 +374,7 @@ class DeterministicCanonicalizer:
         # terms the multi-step loop uses, and stop as soon as the text reads
         # as language.
         if _decoded_confidence(decoded) < MULTI_STEP_DONE_THRESHOLD:
-            decoded = _peel_remaining_layers(decoded)
+            decoded = _peel_remaining_layers(decoded, analyze_code=self._analyze_code)
         return (self._view(decoded, detection.family.value),)
 
     def _canonicalize_multi_step(self, text: str) -> tuple[CanonicalView, ...]:
@@ -374,7 +395,7 @@ class DeterministicCanonicalizer:
         for _ in range(MAX_MULTI_STEP_ROUNDS):
             family = first_layer_family(current)
             peeled = (
-                _decode_single_layer(current, family)
+                _decode_single_layer(current, family, analyze_code=self._analyze_code)
                 if family is not None
                 else _best_letters_layer(current)
             )
