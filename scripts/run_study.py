@@ -4,6 +4,7 @@ Sequential on purpose: the response cache is a single SQLite connection, and
 a shared cache is what makes a re-run after a fix nearly free.
 """
 
+import hashlib
 import json
 import sys
 import time
@@ -39,8 +40,18 @@ def _marker_is_current(marker: Path, config: ExperimentConfig) -> tuple[bool, st
         return False, "run directory is gone"
     if not (run_dir / RUN_COMPLETE_MARKER).exists():
         return False, "run never completed"
-    if not (run_dir / "results.jsonl").exists():
+    results = run_dir / "results.jsonl"
+    if not results.exists():
         return False, "run has no results"
+    # Existence is not enough: a run whose results file is empty or holds
+    # only blank lines has nothing for `analyse_study.py` to read, and an
+    # arm silently contributing zero records to a table is indistinguishable
+    # in that table from an arm that was never run.
+    try:
+        if not any(line.strip() for line in results.read_text(encoding="utf-8").splitlines()):
+            return False, "results file is empty"
+    except OSError as exc:
+        return False, f"results unreadable ({type(exc).__name__})"
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.exists():
         return False, "run has no manifest"
@@ -50,6 +61,17 @@ def _marker_is_current(marker: Path, config: ExperimentConfig) -> tuple[bool, st
         return False, f"manifest unreadable ({type(exc).__name__})"
     if manifest.get("config_hash") != config_hash(config):
         return False, "config changed since the run"
+    # The config hash covers the config, which names the dataset by *path*.
+    # Regenerating the benchmark leaves every config byte-identical while
+    # making every stored result stale, so the content hash is checked too.
+    recorded = manifest.get("dataset_sha256")
+    if recorded is not None:
+        try:
+            current = hashlib.sha256(config.dataset.read_bytes()).hexdigest()
+        except OSError as exc:
+            return False, f"dataset unreadable ({type(exc).__name__})"
+        if recorded != current:
+            return False, "dataset changed since the run"
     return True, ""
 
 
