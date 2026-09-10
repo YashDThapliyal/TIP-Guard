@@ -336,15 +336,33 @@ def undefended_by_family() -> None:
 #: The label review the "validate automatic evaluation" criterion refers to.
 GOLD_REVIEW = Path("data/labels/gold-review.jsonl")
 
-#: Modules that turn attacker-supplied text into a canonical form. The
-#: no-execution criterion is a claim about these.
-CANONICALIZATION = Path("src/tipguard/canonicalization")
+#: The whole library. The no-execution criterion is a claim about the
+#: package, not about one directory: scanning only `canonicalization/` would
+#: report "met" while an execution path introduced anywhere else went unseen.
+PACKAGE = Path("src/tipguard")
 
 #: Builtins that would execute attacker-controlled input if called directly.
 EXECUTION_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
 
-#: Modules whose calls run external processes.
-EXECUTION_MODULES = frozenset({"os", "subprocess", "runpy", "importlib"})
+#: Module functions that start a process or import by name. Named
+#: individually rather than by module, because `os` also holds ordinary file
+#: I/O -- `os.open`, `os.fdopen` and `os.getpid` are all used legitimately in
+#: this package, and flagging the module wholesale would report the criterion
+#: unmet on the strength of a file handle.
+EXECUTION_CALLS = frozenset(
+    {
+        ("os", "system"),
+        ("os", "popen"),
+        ("os", "fork"),
+        ("os", "posix_spawn"),
+        ("runpy", "run_path"),
+        ("runpy", "run_module"),
+        ("importlib", "import_module"),
+    }
+)
+
+#: Modules where every call spawns or executes.
+EXECUTION_MODULES = frozenset({"subprocess"})
 
 
 def _gold_review_row() -> tuple[str, str, str]:
@@ -381,52 +399,74 @@ def _gold_review_row() -> tuple[str, str, str]:
 
 
 def _manifest_row() -> tuple[str, str, str]:
-    """Checked against a real manifest rather than described."""
-    required = {"config", "config_hash", "dataset_sha256", "main_model", "tipguard_version"}
+    """Checked against every run, not one.
+
+    An earlier version read `markers[0]` and reported "met" on the strength of
+    a single manifest, so nineteen broken ones would have passed. Values are
+    required to be non-empty as well as present, since a `config_hash` of `""`
+    records nothing while satisfying a key check.
+    """
+    required = ("config", "config_hash", "dataset_sha256", "main_model", "tipguard_version")
     markers = sorted(MARKERS.glob("*.json"))
     if not markers:
         return ("Record reproducible model, prompt, dataset and config versions", "no runs", "-")
-    run_dir = Path(json.loads(markers[0].read_text(encoding="utf-8"))["run_dir"])
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    missing = sorted(required - set(manifest))
+    faults: list[str] = []
+    for marker in markers:
+        run_dir = Path(json.loads(marker.read_text(encoding="utf-8"))["run_dir"])
+        path = run_dir / "manifest.json"
+        if not path.exists():
+            faults.append(f"{marker.stem}: no manifest")
+            continue
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        for key in required:
+            if key not in manifest:
+                faults.append(f"{marker.stem}: missing {key}")
+            elif manifest[key] in ("", None, {}, []):
+                faults.append(f"{marker.stem}: empty {key}")
     return (
         "Record reproducible model, prompt, dataset and config versions",
-        "per-run manifest carries " + ", ".join(f"`{k}`" for k in sorted(required)),
-        "met" if not missing else f"**missing {missing}**",
+        f"all {len(markers)} run manifests carry " + ", ".join(f"`{k}`" for k in required),
+        "met" if not faults else f"**{len(faults)} fault(s), e.g. {faults[0]}**",
     )
 
 
 def _no_execution_row() -> tuple[str, str, str]:
-    """Checked by parsing the canonicalization modules, not by grepping them.
+    """Checked by parsing the package, not by grepping it, and not by trusting
+    one directory.
 
     A substring scan for `compile(` flagged `re.compile` in the transformation
     detector -- regex compilation, not code execution. Matching on text cannot
     tell a builtin from an attribute of an unrelated module, which is the same
     reason this project analyses benchmark code with an AST walk rather than
-    pattern matching. So this walks the tree: a bare call to `exec`, `eval`,
-    `compile` or `__import__`, or any call through `os`/`subprocess`/`runpy`/
-    `importlib`, is an offender; `re.compile` is not.
+    pattern matching.
+
+    Scope is the whole package: limiting it to `canonicalization/` would have
+    reported "met" no matter what the rest of the library did with a decoded
+    payload. The trade is that `os` appears here for ordinary file I/O, so the
+    dangerous calls are named individually rather than by module.
+
+    What this cannot see: an aliased builtin (`f = eval; f(x)`) or a call
+    through `getattr`. It is a floor, not a proof.
     """
     offenders: list[str] = []
-    modules = sorted(CANONICALIZATION.rglob("*.py"))
+    modules = sorted(PACKAGE.rglob("*.py"))
     for path in modules:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
+            where = path.relative_to(PACKAGE.parent)
             if isinstance(func, ast.Name) and func.id in EXECUTION_BUILTINS:
-                offenders.append(f"{path.name}:{func.id}")
-            elif (
-                isinstance(func, ast.Attribute)
-                and isinstance(func.value, ast.Name)
-                and func.value.id in EXECUTION_MODULES
-            ):
-                offenders.append(f"{path.name}:{func.value.id}.{func.attr}")
+                offenders.append(f"{where}:{func.id}")
+            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                pair = (func.value.id, func.attr)
+                if pair in EXECUTION_CALLS or func.value.id in EXECUTION_MODULES:
+                    offenders.append(f"{where}:{pair[0]}.{pair[1]}")
     return (
         "Prevent execution of arbitrary benchmark code",
-        f"no exec/eval/compile/__import__ call and no os/subprocess call across "
-        f"{len(modules)} canonicalization modules, by AST walk",
+        f"no exec/eval/compile/__import__ and no process-spawning call across "
+        f"all {len(modules)} package modules, by AST walk",
         "met" if not offenders else f"**found {sorted(set(offenders))}**",
     )
 

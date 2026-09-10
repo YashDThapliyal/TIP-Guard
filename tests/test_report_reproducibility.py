@@ -294,3 +294,31 @@ def test_the_gold_review_is_scored_from_the_file_that_exists() -> None:
         "the report must name the reviewer, since an LLM reviewing an "
         "LLM-built dataset is what makes this criterion only partially met"
     )
+
+
+def test_the_criteria_checks_state_the_scope_they_actually_covered(generated: str) -> None:
+    """The two scored assertions must report the scope they really examined.
+
+    Both were once narrower than they claimed. The manifest row read a single
+    marker and reported "met" for the study, so nineteen broken manifests
+    would have passed. The no-execution row scanned one directory, so an
+    execution path introduced anywhere else in the library was invisible.
+    Tying the counts in the prose to the counts on disk is what stops the
+    scope quietly shrinking again.
+    """
+    manifests = len(list(MARKERS.glob("*.json")))
+    modules = len(list(Path("src/tipguard").rglob("*.py")))
+
+    manifest_row = [line for line in generated.splitlines() if "run manifests carry" in line]
+    assert manifest_row, "the manifest criterion no longer reports its scope"
+    assert f"all {manifests} run manifests" in manifest_row[0], (
+        f"the manifest check claims a different scope than the {manifests} runs on disk: "
+        f"{manifest_row[0]}"
+    )
+
+    exec_row = [line for line in generated.splitlines() if "package modules, by AST walk" in line]
+    assert exec_row, "the no-execution criterion no longer reports its scope"
+    assert f"all {modules} package modules" in exec_row[0], (
+        f"the execution scan claims a different scope than the {modules} modules on disk: "
+        f"{exec_row[0]}"
+    )
