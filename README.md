@@ -229,13 +229,12 @@ Chosen over MIT for two things MIT does not have: the express patent grant in
 section 3, and section 4(b)'s requirement that modified files carry a notice of
 change — the latter suits a benchmark whose results depend on the exact corpus.
 
-For what section 3 actually grants, read [section 3](LICENSE). This file does
-not summarise it. Three attempts at a one-paragraph gloss were each wrong, and
-each wrong in the direction of overstating what a user gets: the first implied
-blanket protection from patent claims, and the last omitted that the grant
-reaches claims infringed by a contribution *in combination with the Work*, not
-only by the contribution alone. The clause is a hundred words and sits in this
-repository; a paraphrase adds nothing and has so far only misled.
+For the scope of that grant, read section 3 of [LICENSE](LICENSE). This
+section deliberately does not restate it: three earlier attempts to do so in a
+paragraph were each wrong — the first claiming more for the reader than the
+clause gives, the next two describing it more narrowly than it is. The clause
+is short, authoritative, and in this repository, so it is quoted here by
+reference only.
 
 Every protected value in `configs/policies.yaml` is a fictional canary,
 committed deliberately so the study's numbers can be verified rather than
