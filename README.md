@@ -81,7 +81,12 @@ Several differences that looked real did not survive that.
 ## What we ran
 
 Seven defences, two ways of giving the model its secret, 989 cases each. Twenty runs in total,
-around 28,000 model calls, roughly six dollars of API time.
+27,709 model calls.
+
+Two thirds of those calls were answered from a local cache built up over earlier work, so the study
+itself billed about $3.92. Running it cold, with nothing cached, pays for all 27,709 and comes to
+$6.06. We quote the second figure wherever the cost of reproducing this comes up, since that is
+what it would cost someone else.
 
 The second variable was not in the original plan. An early pilot showed that the same attacks
 succeeded or failed depending on how the secret had been introduced in the system prompt, so we
@@ -224,7 +229,7 @@ uv run python scripts/make_figures.py artifacts/study-v1/markers    # the two ch
 The records include the model's actual responses, so the leak detection, which is the measurement
 everything else rests on, can be re-derived rather than taken on trust.
 
-To run the study again from scratch, which needs API keys and costs about six dollars:
+To run the study again from scratch, which needs API keys and costs $6.06 with a cold cache:
 
 ```bash
 uv run python -m tipguard.cli.main generate    # build the test cases

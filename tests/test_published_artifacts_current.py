@@ -416,3 +416,65 @@ def test_the_readme_avoids_em_dashes() -> None:
     """A house style rule, checked rather than remembered."""
     text = README.read_text(encoding="utf-8")
     assert "\u2014" not in text, "the README contains an em dash"
+
+
+def _spend_from_artifacts() -> tuple[float, float, int]:
+    """Notional cost, billed cost, and model calls, from the run records.
+
+    `cost_usd` on a record prices every call whether or not it came from the
+    cache, so summing it gives what a cold reproduction pays rather than what
+    this study spent. The billed figure weights each record by the share of
+    its calls that missed the cache.
+    """
+    notional = billed = 0.0
+    calls = 0
+    for marker in sorted(MARKERS.glob("*.json")):
+        run_dir = Path(json.loads(marker.read_text(encoding="utf-8"))["run_dir"])
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = CaseRecord.model_validate_json(line)
+            notional += record.cost_usd
+            calls += record.model_calls
+            if record.model_calls:
+                uncached = record.model_calls - record.cached_model_calls
+                billed += record.cost_usd * uncached / record.model_calls
+    return notional, billed, calls
+
+
+def test_the_readme_states_both_costs_correctly() -> None:
+    """Cost is easy to state wrongly and nothing was checking it.
+
+    `cost_usd` is notional, so the total across the artifacts is what a cold
+    reproduction pays, not what this study spent. The README first said the
+    study cost "roughly six dollars", which is the cold figure; the actual
+    spend was lower because two thirds of the calls were cache hits. The same
+    error had already been corrected once in `docs/report.md` and came back in
+    the rewrite, which is why it is now checked rather than proofread.
+    """
+    if not MARKERS.is_dir():
+        pytest.skip(f"no committed artifacts at {MARKERS}")
+    notional, billed, calls = _spend_from_artifacts()
+    text = README.read_text(encoding="utf-8")
+
+    assert f"${notional:.2f}" in text, (
+        f"the README does not quote the cold-reproduction cost of ${notional:.2f}"
+    )
+    assert f"${billed:.2f}" in text, (
+        f"the README does not quote the study's actual spend of ${billed:.2f}"
+    )
+    # Every occurrence, not merely one. The call count appears twice, so an
+    # existence check passed while one of them was edited to 28,000 -- the
+    # same existence-versus-all gap already fixed for the case counts.
+    quoted_calls = {int(m.replace(",", "")) for m in re.findall(r"\b\d{2},\d{3}\b", text)}
+    assert quoted_calls == {calls}, (
+        f"the README quotes call counts {sorted(quoted_calls)}; the artifacts record {calls:,}"
+    )
+
+    # And must not present the cold figure as what the study spent.
+    quoted = {float(m) for m in re.findall(r"\$(\d+\.\d{2})", text)}
+    unexplained = sorted(q for q in quoted if abs(q - notional) > 0.005 and abs(q - billed) > 0.005)
+    assert not unexplained, (
+        f"the README quotes dollar figures that match neither the cold cost (${notional:.2f}) "
+        f"nor the billed spend (${billed:.2f}): {unexplained}"
+    )
