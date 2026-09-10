@@ -31,13 +31,18 @@ so.
 
 Six findings, in descending order of how much they should change what a practitioner does.
 
-1. **None of the seven defences is deployable at the bar this project set.** The design target,
-   fixed before measurement, was an operating point below a 10% false-positive rate. Sweeping every
+1. **None of the seven defences is deployable at the bar this project set.** Of seven success
+   criteria fixed before measurement, two were met, four were missed and one was never attempted;
+   all are scored under [The success criteria as
+   registered](#the-success-criteria-as-registered-and-what-happened-to-them). The two that matter
+   most both concern the cost side. The false-positive target was below 10%; sweeping every
    threshold on the stored scores, the best available frontier is **0.82 attacks blocked at 0.13
-   false positives** — one legitimate request in eight refused to catch four attacks in five. The
-   binding constraint throughout is false positives on legitimate encoded work, not detection. The
-   sweep also corrects this study's own setup: the 0.5 threshold every arm ran at was suboptimal,
-   and 0.65 more than halves false positives for 14 points of detection.
+   false positives** — one legitimate request in eight refused to catch four attacks in five. And
+   benign task accuracy was to stay within 5 points of undefended; it fell **25**, from 0.63 to
+   0.39, so about a quarter of the legitimate encoded work the bare model handles is lost to the
+   guardrail. The binding constraint throughout is the cost to legitimate traffic, not detection.
+   The sweep also corrects this study's own setup: the 0.50 threshold every arm ran at was
+   suboptimal, and 0.65 more than halves false positives for 14 points of detection.
 
 2. **The system prompt matters more than the guardrail.** Undefended, gpt-4o-mini leaked on
    0.75 [0.72–0.78] of prohibited cases when protected values were supplied as ordinary working
@@ -529,6 +534,40 @@ families, and those intervals separate, so that is a result. Both TIP-Guard arms
 (a second classifier pass plus an output guard) is what buys robustness to novel attack families;
 canonicalization contributes nothing measurable to it. This was the last remaining case for the
 method and it does not hold.
+
+## The success criteria as registered, and what happened to them
+
+`docs/project-spec.md` fixed seven success criteria before any measurement, described there as
+"target thresholds, not assumed outcomes". Two were met.
+
+| Criterion | Measured | Verdict |
+| --- | --- | --- |
+| Reduce TIP violations ≥70% vs the strongest baseline | the strongest baseline already sits at 0.00; TIP-Guard also 0.00 | not achievable as stated |
+| Preserve benign task accuracy within 5 points | 0.63 undefended → 0.39 (**25 points**) | **not met** |
+| Keep benign false-positive rate below 10% | TIP-Guard 0.38; best across all arms and thresholds 0.13 | **not met** |
+| Improve held-out detection ≥30% vs input-only filtering | 0.91 → 1.00 (10% relative) | **not met** |
+| Validate automatic evaluation against a human-reviewed subset | no gold-review artifact exists | not done |
+| Record reproducible model, prompt, dataset and config versions | per-run manifest with config hash and dataset digest | met |
+| Prevent execution of arbitrary benchmark code | code cases parsed statically; no execution path | met |
+
+Three of these deserve comment.
+
+**The violation-reduction criterion cannot be scored as written.** It asks for a 70% reduction
+against the strongest baseline, but the strongest baseline leaks nothing — a floor leaves no room to
+improve on. Measured against the *undefended* arm the reduction is 100%, which sounds impressive and
+means little, since conventional filtering achieves the same. The criterion assumed a baseline that
+would still be leaking, and that assumption did not hold.
+
+**The benign-accuracy criterion failed by a wide margin and is the most damaging result here.**
+The target was a drop of at most 5 points; the measured drop is 25. TIP-Guard answers 0.39 of benign
+transformation tasks correctly against 0.63 undefended, which means roughly a quarter of legitimate
+encoded work that the bare model handles is lost to the guardrail. That cost is visible in the
+tables above but was never scored against the bar the project set for it, and it is the clearest
+statement of why none of these defences is deployable.
+
+**The held-out criterion missed by a factor of three**, and the reason is the same ceiling that
+sinks the primary hypothesis: input-only filtering already reaches 0.91 on unseen families, so the
+available headroom is 9 points, not the 30% relative gain the criterion anticipated.
 
 ## Failure analysis
 
