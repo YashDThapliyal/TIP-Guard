@@ -15,6 +15,7 @@ from tipguard.canonicalization.llm_canonicalizer import LLMCanonicalizer
 from tipguard.canonicalization.multi_view import MultiViewCanonicalizer
 from tipguard.canonicalization.types import DetectionResult
 from tipguard.classifiers.llm_risk import LLMRiskClassifier
+from tipguard.classifiers.prompts import PROMPT_VERSION
 from tipguard.config.loader import ConfigError
 from tipguard.config.schemas import PoliciesConfig
 from tipguard.models.registry import ProviderRegistry
@@ -36,6 +37,7 @@ KNOWN_PARAMS = frozenset(
     {
         "canonicalizer_model",
         "classifier_model",
+        "prompt_version",
         "rule",
         "threshold",
         "enable_detector",
@@ -95,6 +97,12 @@ def build_tip_guard(
     threshold = parse_threshold(params, "threshold", DEFAULT_THRESHOLD, name)
     canonicalizer_alias = str(params.get("canonicalizer_model", DEFAULT_CANONICALIZER_MODEL))
     classifier_alias = str(params.get("classifier_model", DEFAULT_CLASSIFIER_MODEL))
+    # One version for all three classifiers this builds. The study compares
+    # TIP-Guard against the calibrated-prompt baseline, so leaving these on
+    # the defective v1 prompt would measure that defect instead of
+    # canonicalization; letting the three stages disagree would measure
+    # neither version.
+    prompt_version = str(params.get("prompt_version", PROMPT_VERSION))
 
     enable_detector = parse_bool(params, "enable_detector", True, name)
     enable_decoders = parse_bool(params, "enable_decoders", True, name)
@@ -134,9 +142,13 @@ def build_tip_guard(
             provider=registry.get(classifier_alias),
             policies=policies,
             name="original_classifier",
+            prompt_version=prompt_version,
         )
     canonical_classifier = LLMRiskClassifier(
-        provider=registry.get(classifier_alias), policies=policies, name="canonical_classifier"
+        provider=registry.get(classifier_alias),
+        policies=policies,
+        name="canonical_classifier",
+        prompt_version=prompt_version,
     )
 
     output_guard: OutputGuard | None = None
@@ -147,6 +159,7 @@ def build_tip_guard(
                 provider=registry.get(classifier_alias),
                 policies=policies,
                 name="output_classifier",
+                prompt_version=prompt_version,
             ),
             threshold=threshold,
         )
