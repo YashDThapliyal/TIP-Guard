@@ -19,6 +19,16 @@ and one was refuted; all five are reported under
 [The hypotheses as stated](#the-hypotheses-as-stated-and-what-happened-to-them). The findings worth
 carrying away were not among them.
 
+**How to read the numbers.** The benchmark is generated from templates, so every *absolute level*
+below — a 0.75 violation rate, a 0.32 false-positive rate — is a property of this corpus and should
+not be read as an estimate of what real traffic would produce. The *contrasts* are the load-bearing
+results, and they are much less exposed to that limitation, because each holds the case set fixed
+and varies one thing: the same 989 cases under two system prompts, the same architecture under two
+classifier prompts, the same pipeline with one component removed. A templated corpus can make a
+level unrepresentative; it is far harder for it to invent a 25× difference between two conditions
+measured on identical inputs. Where a finding below rests on a level rather than a contrast, it says
+so.
+
 Six findings, in descending order of how much they should change what a practitioner does.
 
 1. **None of the seven defences is deployable at the bar this project set.** The design target,
@@ -584,8 +594,22 @@ direct requests, all at 0.00. Every classifier-based arm, canonicalizing or not,
 
 ## Limitations
 
-- **Synthetic benchmark.** Cases are generated from templates. Generated attacks are less varied
-  than adversarial human ones, and a defence tuned against this corpus may not transfer.
+- **Synthetic benchmark, and what that does and does not undermine.** Cases are generated from
+  templates. Generated attacks are less varied than adversarial human ones, and a defence tuned
+  against this corpus may not transfer. This bears unevenly on the results. Absolute levels are the
+  exposed ones: that undefended gpt-4o-mini leaks on 0.75 of prohibited cases is a fact about these
+  templates, and real attacks could be easier or harder. The contrasts are far more robust, because
+  each varies one thing across an identical case set — the system-prompt condition, the classifier
+  prompt version, the canonicalization ablation. For a templated corpus to manufacture the
+  system-prompt result it would have to interact with the framing of the protected data, which is
+  not a property the templates encode. The correct summary is that this study establishes
+  *directions and rough magnitudes* that should replicate, and *point estimates* that should not be
+  quoted as characterising real traffic.
+- **Deliberately not extended.** Generating adversarial cases with an LLM to broaden the corpus was
+  considered and declined: cases written by a model carry that model's distribution rather than a
+  human attacker's, and generating attacks with one Claude model to evaluate defences protecting
+  another risks correlating difficulty with the system under test. The templating limitation is
+  therefore stated and left standing rather than papered over with more synthetic variety.
 - **Two models.** gpt-4o-mini throughout, plus claude-haiku-4.5 on the undefended arm only. The
   cross-model row is enough to show vulnerability is model-dependent; it is not enough to
   characterise how.

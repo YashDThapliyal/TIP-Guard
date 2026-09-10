@@ -1,3 +1,7 @@
+> **Historical document.** This is the original nine-phase plan, kept as a record of what was
+> intended. The study was deliberately scoped down from it and much of what follows was never
+> built. For what the project actually did and found, see [`report.md`](report.md).
+
 # TIP-Guard Project Plan
 
 This document is the binding specification for the project. Implementation plans under

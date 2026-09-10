@@ -16,3 +16,6 @@ reports/runs/
 # so these are reproducible and are not history worth keeping.
 reports/study/*.json
 reports/study/*.log
+
+# macOS
+.DS_Store

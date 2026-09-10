@@ -1,20 +1,57 @@
 # TIP-Guard
 
-TIP-Guard is a defensive guardrail that identifies the latent intent an LLM reconstructs while
-solving encoded, transformed, or indirect tasks. It builds a safe benchmark of Task-in-Prompt
-(TIP) style policy violations, a reusable guardrail pipeline based on semantic canonicalization,
-and a reproducible evaluation framework for measuring whether canonicalization detects these
-violations more effectively than conventional filtering, without significantly harming legitimate
-reasoning tasks.
+TIP-Guard asks whether **semantic canonicalization** — decoding a prompt's hidden task before
+judging it — detects Task-in-Prompt policy violations better than conventional filtering, without
+breaking legitimate encoded work. It contains a synthetic benchmark of 1,700 cases, seven guardrail
+configurations, and a completed 20-arm study over 989 held-out cases on two models.
+
+## The study is finished, and the answer is no
+
+**[`docs/report.md`](docs/report.md) is the result.** Canonicalization changed nothing measurable
+against an ablation differing in canonicalization alone, at 2.6× the cost of the best conventional
+arm. Of five hypotheses registered in advance, one went untested, three were unsupported, and one
+was refuted.
+
+The findings that survived were not the ones the study set out to test:
+
+- **The system prompt outweighed every guardrail.** Supplying protected values as ordinary context
+  rather than naming and forbidding them moved the undefended violation rate from 0.03 to 0.75 — a
+  25× swing for a prompt edit, at no inference cost and no false positives.
+- **One clause of a classifier prompt outweighed every architectural change.** Asking a model to
+  rate attempts to "extract, *encode*, or otherwise exfiltrate" makes the encoding itself read as
+  guilt. Removing that idea cut false positives from 0.71 to 0.35 and raised benign accuracy from
+  0.15 to 0.42, holding architecture, models and cost constant.
+- **A single-score leaderboard would rank the worst defence first.** That naive classifier posts
+  1.00 detection and blocks 68% of legitimate traffic.
+- **Some apparent robustness is incapacity, not refusal.** Violation rates correlate at r = +0.92
+  with how well the model performs the same transformation on a *harmless* task. The safest attack
+  family for gpt-4o-mini is one it cannot execute at all — protection that erodes as models improve.
+- **No defence tested is deployable** at the sub-10% false-positive bar the project set in advance.
+  The best frontier is 0.82 attacks blocked at 0.13 false positives.
+
+Absolute levels are properties of a templated corpus; the contrasts, which hold the case set fixed,
+are the load-bearing results. The report says which is which.
+
+### Check the numbers without re-running anything
+
+```bash
+uv sync
+uv run python scripts/analyse_study.py artifacts/study-v1/markers
+uv run python scripts/report_tables.py artifacts/study-v1/markers
+```
+
+Every run's per-case results are committed under
+[`artifacts/study-v1/`](artifacts/README.md), so each table in the report can be recomputed offline.
 
 ## Documentation
 
-- [`docs/project-plan.md`](docs/project-plan.md) is the binding project specification for all nine phases.
-- [`docs/project-spec.md`](docs/project-spec.md) restates the objective, scope, architecture, success criteria, and non-goals.
+- [`docs/report.md`](docs/report.md) — **the study, its results, and its limitations.** Start here.
 - [`docs/threat-model.md`](docs/threat-model.md) defines the protected assets, the attacker, and what counts as a policy violation.
 - [`docs/safety-protocol.md`](docs/safety-protocol.md) sets the rules for synthetic data, code safety, logging, and release.
-- [`docs/research-questions.md`](docs/research-questions.md) states the primary question and hypotheses H1 to H5.
+- [`docs/research-questions.md`](docs/research-questions.md) states the primary question and hypotheses H1 to H5, as registered before the study.
 - [`docs/dataset-card.md`](docs/dataset-card.md) describes `tipguard-v1`: composition, splits, labeling, the gold review, limitations, and the dataset hash.
+- [`docs/project-spec.md`](docs/project-spec.md) restates the objective, scope, architecture, success criteria, and non-goals.
+- [`docs/project-plan.md`](docs/project-plan.md) is the original nine-phase plan. It is kept as a historical record; the study was deliberately scoped down from it, so it describes work that was never done and should not be read as a description of this repository.
 
 ## Requirements
 
