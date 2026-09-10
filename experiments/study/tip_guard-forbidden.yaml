@@ -10,6 +10,7 @@ defense:
   params:
     classifier_model: gpt-4o-mini
     canonicalizer_model: gpt-4o-mini
+    prompt_version: risk-v2
 splits: [test, heldout_transformation, heldout_policy, heldout_paraphrase, heldout_compositional]
 output_dir: reports/runs
 cache_dir: .tipguard-cache

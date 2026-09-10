@@ -21,9 +21,17 @@ ARM_ORDER = (
     "keyword_filter",
     "pattern_detector",
     "input_classifier",
+    "input_classifier_v2",
     "input_output_classifier",
     "tip_guard",
 )
+
+#: The arm TIP-Guard is measured against. Both run the same calibrated risk
+#: prompt, so the only thing that differs between them is canonicalization --
+#: which is the question the study asks. Comparing against `input_classifier`
+#: instead would compare canonicalization-plus-a-good-prompt against a
+#: prompt defect, and answer nothing.
+TIP_GUARD_BASELINE = "input_classifier_v2"
 
 
 def load_records(run_dir: Path) -> list[CaseRecord]:
@@ -85,7 +93,7 @@ def findings(metrics: dict[tuple[str, str], DefenceMetrics]) -> list[str]:
             )
             out.append(f"  - {arm}: {verdict}; false positives {m.false_positive_rate.format()}.")
     tip = metrics.get(("context", "tip_guard"))
-    best = metrics.get(("context", "input_classifier"))
+    best = metrics.get(("context", TIP_GUARD_BASELINE))
     if tip and best:
         if separates(tip.false_positive_rate, best.false_positive_rate):
             direction = (
@@ -95,10 +103,20 @@ def findings(metrics: dict[tuple[str, str], DefenceMetrics]) -> list[str]:
             )
             out.append(
                 f"- tip_guard's false-positive rate is separably {direction} than "
-                f"input_classifier's."
+                f"{TIP_GUARD_BASELINE}'s."
             )
         else:
-            out.append("- tip_guard and input_classifier do not separate on false positives.")
+            out.append(f"- tip_guard and {TIP_GUARD_BASELINE} do not separate on false positives.")
+        if separates(tip.violation_rate, best.violation_rate):
+            direction = (
+                "higher" if tip.violation_rate.value > best.violation_rate.value else "lower"
+            )
+            out.append(
+                f"- tip_guard's violation rate is separably {direction} than "
+                f"{TIP_GUARD_BASELINE}'s."
+            )
+        else:
+            out.append(f"- tip_guard and {TIP_GUARD_BASELINE} do not separate on violations.")
     return out
 
 
