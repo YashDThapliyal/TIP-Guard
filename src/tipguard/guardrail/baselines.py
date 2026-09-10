@@ -39,6 +39,24 @@ DEFAULTS: dict[str, Any] = {
 
 KNOWN_PARAMS = frozenset(DEFAULTS)
 
+#: Which of those parameters each baseline actually reads.
+#:
+#: `KNOWN_PARAMS` is the union, and validating every arm against the union was
+#: too loose in both directions: a config could set `output_threshold` on
+#: `keyword_filter` and have it silently ignored, and a run's manifest would
+#: then report `classifier_model` and `prompt_version` as that filter's
+#: effective settings when it never consults a model at all. A manifest that
+#: names settings which had no effect is not a record of what ran.
+PARAMS_BY_DEFENSE: dict[str, frozenset[str]] = {
+    "keyword_filter": frozenset({"input_threshold"}),
+    "pattern_detector": frozenset({"input_threshold"}),
+    "input_classifier": frozenset({"classifier_model", "prompt_version", "input_threshold"}),
+    "output_classifier": frozenset(
+        {"classifier_model", "prompt_version", "output_threshold", "leak_check"}
+    ),
+    "input_output_classifier": KNOWN_PARAMS,
+}
+
 #: Which model rates risk when a defence needs one. A mock by default so the
 #: whole baseline suite runs offline and in CI; real aliases are selected by
 #: the experiment configs.
@@ -57,11 +75,11 @@ _FALSE = frozenset({"false", "no", "off", "0"})
 
 
 def _check_params(params: Mapping[str, Any], defense: str) -> None:
-    unknown = sorted(set(params) - KNOWN_PARAMS)
+    accepted = PARAMS_BY_DEFENSE[defense]
+    unknown = sorted(set(params) - accepted)
     if unknown:
         raise ConfigError(
-            f"defense {defense!r} got unknown params {unknown}; "
-            f"known params: {sorted(KNOWN_PARAMS)}"
+            f"defense {defense!r} got unknown params {unknown}; known params: {sorted(accepted)}"
         )
 
 

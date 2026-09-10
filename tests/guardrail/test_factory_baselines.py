@@ -406,10 +406,57 @@ def test_the_defaults_mapping_covers_exactly_the_accepted_params() -> None:
         )
 
 
+@pytest.mark.parametrize("defense", sorted(BASELINE_NAMES))
+def test_resolved_params_name_only_what_the_defence_accepts(
+    defense: str, registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """A manifest must not credit a defence with settings it never reads.
+
+    Reporting the whole family's parameters told a reader that
+    `keyword_filter` ran with a `classifier_model` and a `prompt_version`,
+    when it consults no model at all. The reported set is tied to the set the
+    build validates against, so the two cannot diverge: anything reported must
+    be settable, and anything settable must be reported.
+    """
+    from tipguard.guardrail.baselines import PARAMS_BY_DEFENSE
+    from tipguard.guardrail.factory import resolve_params
+
+    expected = PARAMS_BY_DEFENSE.get(defense, frozenset())
+    assert set(resolve_params(DefenseConfig(name=defense))) == set(expected)
+
+
+@pytest.mark.parametrize("defense", sorted(BASELINE_NAMES))
+def test_a_param_a_defence_does_not_read_is_rejected(
+    defense: str, registry: ProviderRegistry, policies: PoliciesConfig
+) -> None:
+    """The other half of the same invariant, checked through the real build.
+
+    Previously every baseline validated against the union, so setting
+    `output_threshold` on `keyword_filter` was accepted and silently ignored --
+    and then reported as effective.
+    """
+    from tipguard.guardrail.baselines import KNOWN_PARAMS, PARAMS_BY_DEFENSE
+
+    accepted = PARAMS_BY_DEFENSE.get(defense, frozenset())
+    inapplicable = sorted(KNOWN_PARAMS - accepted)
+    if not inapplicable:
+        pytest.skip(f"{defense} reads every known param")
+    # Either rejection wording is fine; what matters is that it is refused
+    # rather than accepted and ignored. `no_defense` says "takes no params",
+    # the rest say "unknown params".
+    with pytest.raises(ConfigError, match="params"):
+        build_guardrail(
+            DefenseConfig(name=defense, params={inapplicable[0]: 0.5}),
+            registry,
+            "mock-main",
+            policies,
+        )
+
+
 def test_resolved_params_fill_in_what_a_config_omitted(
     registry: ProviderRegistry, policies: PoliciesConfig
 ) -> None:
-    from tipguard.guardrail.baselines import DEFAULTS
+    from tipguard.guardrail.baselines import DEFAULTS, PARAMS_BY_DEFENSE
     from tipguard.guardrail.factory import resolve_params
 
     resolved = resolve_params(
@@ -417,7 +464,11 @@ def test_resolved_params_fill_in_what_a_config_omitted(
     )
     assert resolved["input_threshold"] == 0.9, "an explicit value must win"
     assert resolved["classifier_model"] == DEFAULTS["classifier_model"], "a default must fill in"
-    assert set(resolved) == set(DEFAULTS)
+    # Not every known param: `input_classifier` has no output stage, so
+    # reporting `output_threshold` or `leak_check` would describe a stage it
+    # does not run.
+    assert set(resolved) == set(PARAMS_BY_DEFENSE["input_classifier"])
+    assert "output_threshold" not in resolved
 
 
 def test_the_resolved_threshold_is_the_one_the_guard_runs_with(

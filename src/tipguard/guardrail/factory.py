@@ -27,27 +27,20 @@ def resolve_params(defense: DefenseConfig) -> dict[str, object]:
     because this is called to describe a run, not to validate one --
     `build_guardrail` owns the validation and will reject the name anyway.
     """
-    if defense.name == "no_defense":
+    if defense.name == "tip_guard":
+        accepted, defaults = tip_guard_factory.KNOWN_PARAMS, tip_guard_factory.DEFAULTS
+    elif defense.name in baselines.PARAMS_BY_DEFENSE:
+        accepted, defaults = baselines.PARAMS_BY_DEFENSE[defense.name], baselines.DEFAULTS
+    elif defense.name == "no_defense":
+        # Reads nothing, so nothing it was handed took effect.
+        return {}
+    else:
         return dict(defense.params)
-    defaults = tip_guard_factory.DEFAULTS if defense.name == "tip_guard" else baselines.DEFAULTS
-    if defense.name not in DEFENSE_NAMES:
-        return dict(defense.params)
-    return {**defaults, **defense.params}
-
-
-#: Every defence `build_guardrail` accepts. Stated so `resolve_params` can
-#: tell an unknown name from a known one without duplicating the dispatch.
-DEFENSE_NAMES = frozenset(
-    {
-        "no_defense",
-        "keyword_filter",
-        "pattern_detector",
-        "input_classifier",
-        "output_classifier",
-        "input_output_classifier",
-        "tip_guard",
-    }
-)
+    # Restricted to what this defence reads. Reporting the whole family's
+    # parameters would credit `keyword_filter` with a `classifier_model` it
+    # never consults.
+    resolved = {**defaults, **defense.params}
+    return {key: value for key, value in resolved.items() if key in accepted}
 
 
 def build_guardrail(
@@ -66,6 +59,11 @@ def build_guardrail(
     system_prompt = build_system_prompt(policies, system_prompt_condition)
     params = defense.params
     if defense.name == "no_defense":
+        # Validated even though there is nothing to configure: silently
+        # accepting a parameter this arm cannot act on would let a config
+        # claim a setting the control never had.
+        if params:
+            raise ConfigError(f"defense 'no_defense' takes no params, got {sorted(params)}")
         return NoDefense(registry.get(main_model), system_prompt)
     if defense.name == "keyword_filter":
         return baselines.keyword_filter(params, registry, main_model, system_prompt)
