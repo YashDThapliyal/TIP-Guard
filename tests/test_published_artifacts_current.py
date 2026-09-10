@@ -424,6 +424,17 @@ def test_the_readme_avoids_em_dashes() -> None:
 BILLED_WORDS = frozenset({"billed", "spent", "spend"})
 COLD_WORDS = frozenset({"cold", "reproduc", "from scratch"})
 
+#: Any amount of money, however written. `\$(\d+\.\d{2})` missed "$20" and
+#: "$6.0", so a false claim in either form passed unread.
+_MONEY = re.compile(r"\$\s?(\d+(?:\.\d+)?)")
+
+#: Money spelled out in words. The README must quote costs as numerals, so
+#: this is forbidden outright rather than parsed: "twenty dollars in total"
+#: also passed unread, and enumerating number words to catch it would be a
+#: worse check than requiring precision in the first place.
+_WORDED_MONEY = re.compile(r"\b([a-z]+)\s+dollars?\b", re.IGNORECASE)
+
+
 #: A figure's claim is the sentence it sits in. A fixed character window is
 #: too blunt: 160 characters after "$3.92" reaches into the next sentence,
 #: which is about the cold cost, and the check then failed on correct prose.
@@ -505,9 +516,15 @@ def test_the_readme_states_both_costs_correctly() -> None:
     )
 
     # And must not present the cold figure as what the study spent.
-    quoted = {float(m) for m in re.findall(r"\$(\d+\.\d{2})", text)}
+    quoted = {float(m) for m in _MONEY.findall(text)}
     unexplained = sorted(q for q in quoted if abs(q - notional) > 0.005 and abs(q - billed) > 0.005)
     assert not unexplained, (
         f"the README quotes dollar figures that match neither the cold cost (${notional:.2f}) "
         f"nor the billed spend (${billed:.2f}): {unexplained}"
+    )
+
+    worded = _WORDED_MONEY.findall(text)
+    assert not worded, (
+        f"the README states a cost in words: {sorted(set(worded))} dollars. Costs must be "
+        "numerals so they can be checked against the artifacts."
     )
