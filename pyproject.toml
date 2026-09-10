@@ -1,6 +1,8 @@
 [project]
 name = "tipguard"
 version = "0.1.0"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 description = "TIP-Guard: semantic canonicalization guardrail for Task-in-Prompt policy violations"
 readme = "README.md"
 requires-python = ">=3.12"

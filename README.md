@@ -220,3 +220,15 @@ tests/
   guardrail/
   evaluation/
 ```
+
+## License
+
+[Apache-2.0](LICENSE). Chosen over MIT for the explicit patent grant, which
+matters for security tooling: anyone building on the canonicalization approach
+here is covered. The change-notice requirement also helps a benchmark, where a
+result depends on the exact corpus — a modified dataset must say it was
+modified.
+
+The synthetic benchmark is covered by the same licence. Every protected value
+in `configs/policies.yaml` is a fictional canary, published on purpose so the
+study's numbers can be checked; see [`docs/safety-protocol.md`](docs/safety-protocol.md).
