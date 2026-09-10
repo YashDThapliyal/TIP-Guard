@@ -225,20 +225,20 @@ tests/
 
 [Apache-2.0](LICENSE), covering the code and the synthetic benchmark alike.
 
-Chosen over MIT mainly for two clauses. Section 3 is an express patent grant
-from each contributor, so a contributor cannot later assert patents they hold
-over their own contribution against people using it — MIT is silent on
-patents, which leaves that open. It is worth being precise about what this does
-*not* do: the grant runs only from contributors, and only to claims necessarily
-infringed by what they contributed. It is not protection against third-party
-patent claims, and nothing in a licence could provide that. Section 4(b)
-requires modified files to carry a notice of change, which suits a benchmark
+Chosen over MIT chiefly for the express patent grant in section 3, which MIT
+has no equivalent of. Read the clause rather than a summary of it — including
+this one — but in outline it runs from each contributor, and covers only patent
+claims that contributor can license which are necessarily infringed by their
+own contribution. So it constrains contributors; it is not protection against
+third-party patent claims, and no licence could offer that. Section 4(b)'s
+requirement that modified files carry a notice of change also suits a benchmark
 whose results depend on the exact corpus.
 
 Every protected value in `configs/policies.yaml` is a fictional canary,
 committed deliberately so the study's numbers can be verified rather than
 trusted. None corresponds to a real credential, customer or system; see
-[`docs/safety-protocol.md`](docs/safety-protocol.md). That note lives here and
-in the safety protocol rather than in `NOTICE`, because Apache-2.0 §4(d)
-obliges every downstream redistribution to reproduce `NOTICE` verbatim, and
-project commentary does not belong in a file with that reach.
+[`docs/safety-protocol.md`](docs/safety-protocol.md).
+
+`NOTICE` holds the copyright attribution and nothing else, which is what that
+file is conventionally for; the canary explanation belongs in the
+documentation, where it is above.
