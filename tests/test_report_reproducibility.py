@@ -12,6 +12,7 @@ of the committed scripts, except for a named allow-list of values that are
 deliberately not artifact-derived.
 """
 
+import json
 import re
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tipguard.evaluation.summary import CaseRecord
 from tipguard.guardrail.baselines import DEFAULT_THRESHOLD
 
 REPORT = Path("docs/report.md")
@@ -142,7 +144,9 @@ def test_the_sweep_at_the_threshold_as_run_matches_the_arm_it_swept(generated: s
 
     assert swept_detection == arm_detection, (
         f"sweep at {DEFAULT_THRESHOLD} says {swept_detection} while the arm reports "
-        f"{arm_detection}; the sweep is not measuring the same quantity"
+        f"{arm_detection}. Either the sweep is not measuring what the arm measured, or "
+        f"DEFAULT_THRESHOLD has changed since these artifacts were produced -- "
+        f"test_the_shipped_default_still_matches_the_committed_runs distinguishes the two."
     )
 
 
@@ -163,23 +167,88 @@ AS_RUN_CLAIMS = (
 )
 
 
-def test_the_report_names_the_threshold_the_code_actually_defaults_to() -> None:
-    """The report's "as run" claims must match `DEFAULT_THRESHOLD`.
+def _threshold_bracket_from_artifacts(arm: str) -> tuple[float, float]:
+    """The threshold the committed run actually used, bracketed from its own
+    decisions: every allowed score is below it, every blocked score at or
+    above it.
 
-    No study config sets `input_threshold`, so that constant *is* the
-    threshold every arm ran at. If it changes and the report does not, the
-    report misstates its own operating point -- and because the classifier's
-    scores are coarse, the rates can be identical either side of the change,
-    so no value comparison would notice.
+    This is the oracle an "as run" claim needs. `DEFAULT_THRESHOLD` is *not*
+    -- it is today's mutable code default, and the artifacts are a historical
+    record. Asserting the report against the constant would mean that changing
+    the constant forces the report to restate the past incorrectly: set it to
+    0.70 and the test would demand the report claim these arms ran at 0.70,
+    when they ran at 0.50. The manifest cannot settle it either, because it
+    records the config as written and every study config omits
+    `input_threshold`, so the value it resolved to was never stored.
+
+    Parser failures are excluded: they block regardless of threshold, so they
+    constrain nothing.
     """
+    marker = MARKERS / f"{arm}.json"
+    run_dir = Path(json.loads(marker.read_text(encoding="utf-8"))["run_dir"])
+    allowed: list[float] = []
+    blocked: list[float] = []
+    for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = CaseRecord.model_validate_json(line)
+        detail = next(
+            (t.detail for t in record.components if t.component == "input_classifier" and t.detail),
+            None,
+        )
+        if detail is None or detail == "parser_failure":
+            continue
+        (blocked if record.decision.value == "block" else allowed).append(float(detail))
+    return (max(allowed) if allowed else 0.0, min(blocked) if blocked else 1.0)
+
+
+def test_the_report_names_the_threshold_the_committed_runs_actually_used() -> None:
+    """The report's "as run" claims must match what the artifacts show.
+
+    The threshold is bracketed from the runs' own decisions rather than read
+    from `DEFAULT_THRESHOLD`, so the check describes the recorded past instead
+    of the current source. The bracket is open below and closed above because
+    the guard blocks on `score >= threshold`.
+    """
+    if not MARKERS.is_dir():
+        pytest.skip(f"no committed artifacts at {MARKERS}")
+    low, high = _threshold_bracket_from_artifacts("input_classifier_v2-context")
+
     text = REPORT.read_text(encoding="utf-8")
-    expected = f"{DEFAULT_THRESHOLD:.2f}"
     found: list[tuple[str, str]] = []
     for pattern in AS_RUN_CLAIMS:
         matches = re.findall(pattern, text)
         assert matches, f"the report no longer states the threshold in the form {pattern!r}"
         found.extend((pattern, m) for m in matches)
-    wrong = [(p, m) for p, m in found if m != expected]
+
+    wrong = [(p, m) for p, m in found if not low < float(m) <= high]
     assert not wrong, (
-        f"the report claims a different threshold than the code defaults to ({expected}): {wrong}"
+        f"the report states a threshold the committed runs contradict; their decisions put it "
+        f"in ({low}, {high}]: {wrong}"
+    )
+
+    # And the claims must agree with each other, or the report is inconsistent
+    # regardless of which one the artifacts allow.
+    distinct = {m for _, m in found}
+    assert len(distinct) == 1, (
+        f"the report states more than one threshold as run: {sorted(distinct)}"
+    )
+
+
+def test_the_shipped_default_still_matches_the_committed_runs() -> None:
+    """A separate claim from the one above, kept separate on purpose.
+
+    That the *code's* current default agrees with what the artifacts recorded
+    is worth knowing -- it is how you learn the committed study no longer
+    reflects the shipped configuration -- but it is not what makes the
+    report's "as run" statement true. Conflating the two is what let a wrong
+    oracle in.
+    """
+    if not MARKERS.is_dir():
+        pytest.skip(f"no committed artifacts at {MARKERS}")
+    low, high = _threshold_bracket_from_artifacts("input_classifier_v2-context")
+    assert low < DEFAULT_THRESHOLD <= high, (
+        f"DEFAULT_THRESHOLD is now {DEFAULT_THRESHOLD}, outside the ({low}, {high}] the committed "
+        "runs used -- the artifacts predate the current default and the report's operating-point "
+        "discussion needs revisiting"
     )
