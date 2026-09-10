@@ -53,6 +53,26 @@ already committed in `configs/policies.yaml`. See
 [`../docs/safety-protocol.md`](../docs/safety-protocol.md). Results from a
 policy file containing real values must never be committed.
 
+## What these manifests predate
+
+Each `manifest.json` records the config *as written*. Every study config omits
+`input_threshold`, so the threshold all twenty arms ran at was never stored —
+it is recoverable from the results (every allowed score is below it and every
+blocked score at or above it, which brackets it at `0.3 < T <= 0.6`), and
+`tests/test_report_reproducibility.py` checks the report's claim against that
+bracket rather than against the current code default.
+
+Runs made after this snapshot record `effective_defense_params`, which answers
+the question directly. These manifests are left as they were written rather
+than backfilled: a field added later would claim a run-time record that does
+not exist, and the resolved value would come from today's defaults rather than
+the run's.
+
+The library has changed since these runs. `tests/test_published_artifacts_current.py`
+replays committed cases through the current pipeline and fails if any decision
+differs, so "the published evidence still matches the code" is a checked fact
+rather than an assumption. It needs the response cache and skips without it.
+
 ## Provenance
 
 `reports/runs/` is git-ignored working scratch that each run rewrites. This

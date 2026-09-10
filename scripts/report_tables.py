@@ -336,10 +336,12 @@ def undefended_by_family() -> None:
 #: The label review the "validate automatic evaluation" criterion refers to.
 GOLD_REVIEW = Path("data/labels/gold-review.jsonl")
 
-#: The whole library. The no-execution criterion is a claim about the
-#: package, not about one directory: scanning only `canonicalization/` would
-#: report "met" while an execution path introduced anywhere else went unseen.
-PACKAGE = Path("src/tipguard")
+#: Everything that runs as part of the study: the library and the driver
+#: scripts. The no-execution criterion is a claim about all of it, not about
+#: one directory -- scanning only `canonicalization/` would report "met" while
+#: an execution path introduced anywhere else went unseen. Tests are excluded
+#: deliberately: they load modules by path on purpose.
+SCANNED_ROOTS = (Path("src/tipguard"), Path("scripts"))
 
 #: Builtins that would execute attacker-controlled input if called directly.
 EXECUTION_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
@@ -349,15 +351,34 @@ EXECUTION_BUILTINS = frozenset({"exec", "eval", "compile", "__import__"})
 #: I/O -- `os.open`, `os.fdopen` and `os.getpid` are all used legitimately in
 #: this package, and flagging the module wholesale would report the criterion
 #: unmet on the strength of a file handle.
-EXECUTION_CALLS = frozenset(
+#: Fully-qualified callables that start a process, import by name, or
+#: deserialise into live objects. Written dotted so `import os as o` and
+#: `from os import system` resolve to the same target -- matching on the local
+#: name alone missed both.
+#:
+#: Named individually rather than by module because `os` also holds ordinary
+#: file I/O: this package legitimately uses `os.open`, `os.fdopen` and
+#: `os.getpid`, and flagging the module wholesale would report the criterion
+#: unmet on the strength of a file handle. `yaml.load` is listed while
+#: `yaml.safe_load` is not, which is the whole difference between them.
+EXECUTION_TARGETS = frozenset(
     {
-        ("os", "system"),
-        ("os", "popen"),
-        ("os", "fork"),
-        ("os", "posix_spawn"),
-        ("runpy", "run_path"),
-        ("runpy", "run_module"),
-        ("importlib", "import_module"),
+        "os.system",
+        "os.popen",
+        "os.fork",
+        "os.posix_spawn",
+        "os.execv",
+        "os.execve",
+        "os.execvp",
+        "os.spawnv",
+        "runpy.run_path",
+        "runpy.run_module",
+        "importlib.import_module",
+        "pickle.load",
+        "pickle.loads",
+        "marshal.load",
+        "marshal.loads",
+        "yaml.load",
     }
 )
 
@@ -430,43 +451,64 @@ def _manifest_row() -> tuple[str, str, str]:
     )
 
 
+def _import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Local name -> fully-qualified module or callable it refers to.
+
+    `import os as o` binds `o` to `os`; `from os import system as sh` binds
+    `sh` to `os.system`. Without this the scan matched local names, so both
+    spellings slipped past it.
+    """
+    bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bindings[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return bindings
+
+
 def _no_execution_row() -> tuple[str, str, str]:
-    """Checked by parsing the package, not by grepping it, and not by trusting
-    one directory.
+    """Checked by parsing everything that runs, with imports resolved.
 
-    A substring scan for `compile(` flagged `re.compile` in the transformation
-    detector -- regex compilation, not code execution. Matching on text cannot
-    tell a builtin from an attribute of an unrelated module, which is the same
-    reason this project analyses benchmark code with an AST walk rather than
-    pattern matching.
+    Three earlier versions were each too narrow. A substring scan for
+    `compile(` flagged `re.compile` -- matching on text cannot tell a builtin
+    from an attribute of an unrelated module, which is the same reason this
+    project analyses benchmark code with an AST walk rather than patterns.
+    Scoping to `canonicalization/` hid anything the rest of the library did
+    with a decoded payload. And matching local names missed `import os as o`
+    and `from os import system`, so imports are resolved first.
 
-    Scope is the whole package: limiting it to `canonicalization/` would have
-    reported "met" no matter what the rest of the library did with a decoded
-    payload. The trade is that `os` appears here for ordinary file I/O, so the
-    dangerous calls are named individually rather than by module.
-
-    What this cannot see: an aliased builtin (`f = eval; f(x)`) or a call
-    through `getattr`. It is a floor, not a proof.
+    What it still cannot see: a call assembled at run time -- an aliased
+    builtin (`f = eval; f(x)`), `getattr(os, name)(...)`, or a name looked up
+    in `globals()`. It is a floor, not a proof, and the guarantee that
+    benchmark code is never executed rests on `RestrictedCodeAnalyzer`'s
+    whitelist walk rather than on this scan.
     """
     offenders: list[str] = []
-    modules = sorted(PACKAGE.rglob("*.py"))
+    modules = sorted(path for root in SCANNED_ROOTS for path in root.rglob("*.py"))
     for path in modules:
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        bindings = _import_bindings(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            where = path.relative_to(PACKAGE.parent)
-            if isinstance(func, ast.Name) and func.id in EXECUTION_BUILTINS:
-                offenders.append(f"{where}:{func.id}")
+            if isinstance(func, ast.Name):
+                if func.id in EXECUTION_BUILTINS:
+                    offenders.append(f"{path}:{func.id}")
+                elif bindings.get(func.id, "") in EXECUTION_TARGETS:
+                    offenders.append(f"{path}:{bindings[func.id]}")
             elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                pair = (func.value.id, func.attr)
-                if pair in EXECUTION_CALLS or func.value.id in EXECUTION_MODULES:
-                    offenders.append(f"{where}:{pair[0]}.{pair[1]}")
+                base = bindings.get(func.value.id, func.value.id)
+                if f"{base}.{func.attr}" in EXECUTION_TARGETS or base in EXECUTION_MODULES:
+                    offenders.append(f"{path}:{base}.{func.attr}")
     return (
         "Prevent execution of arbitrary benchmark code",
-        f"no exec/eval/compile/__import__ and no process-spawning call across "
-        f"all {len(modules)} package modules, by AST walk",
+        f"no exec/eval/compile/__import__ and no process-spawning, dynamic-import or "
+        f"deserialising call across all {len(modules)} library and script modules, "
+        f"by AST walk with imports resolved",
         "met" if not offenders else f"**found {sorted(set(offenders))}**",
     )
 
