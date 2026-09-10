@@ -11,6 +11,8 @@ reports/runs/
 .tipguard-cache/
 .superpowers/
 .env
-reports/runs/
+# Study driver state: per-arm completion markers and driver logs. Derived
+# outputs -- the grid that produced them is committed under experiments/study,
+# so these are reproducible and are not history worth keeping.
 reports/study/*.json
-reports/study/run.log
+reports/study/*.log
