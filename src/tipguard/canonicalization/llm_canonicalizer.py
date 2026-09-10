@@ -33,6 +33,7 @@ classifier.
 """
 
 from collections.abc import Sequence
+from math import ceil
 from typing import Annotated
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator
@@ -288,9 +289,12 @@ _INCIDENTAL_WORDS = frozenset(
 #: contiguously, so 0.75 has room while still catching a near-complete one.
 MIN_DISCLOSED_SHARE = 0.75
 
-#: Below this a value is too short for a partial rule: three quarters of a
-#: twelve-character value is nine characters, which is still specific, but of
-#: an eight-character value it is six, which is not.
+#: Below this a value is too short for a partial rule at all: three quarters
+#: of a twelve-character value is nine characters, which is still specific,
+#: but of an eight-character value it is six, which is not. A short value is
+#: excluded outright rather than held to a raised threshold -- clamping the
+#: run length upwards instead made a thirteen-character value's effective
+#: share 92%, while the constant said 75%.
 MIN_PARTIAL_VALUE = 12
 
 
@@ -314,7 +318,13 @@ def _discloses_most_of_a_value(text: str, protected_values: tuple[str, ...]) -> 
         target = squash(value)
         if len(target) < MIN_PARTIAL_VALUE:
             continue
-        run = max(MIN_PARTIAL_VALUE, int(len(target) * MIN_DISCLOSED_SHARE))
+        # Rounded up, not truncated: `int()` turned 0.75 of a 21-character
+        # value into 15, a 71% threshold advertised as 75%. The clamp that
+        # used to sit here made it worse in the other direction, raising a
+        # 13-character value's threshold to 92%, so short values are excluded
+        # by `MIN_PARTIAL_VALUE` instead of being silently held to a
+        # different standard.
+        run = ceil(len(target) * MIN_DISCLOSED_SHARE)
         if any(target[start : start + run] in haystack for start in range(len(target) - run + 1)):
             return True
     return False

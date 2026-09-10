@@ -631,3 +631,65 @@ def test_a_small_fragment_is_a_recorded_limit() -> None:
     assert not isinstance(result, CanonError), (
         "the threshold moved: update this test and MIN_DISCLOSED_SHARE"
     )
+
+
+def test_the_advertised_threshold_is_the_implemented_one() -> None:
+    """The constant and the behaviour must agree, for every shipped value.
+
+    They did not: truncating the run length made a 21-character value's
+    effective threshold 71%, and a clamp meant to protect short values raised
+    a 13-character value's to 92% -- both while the constant read 0.75. A
+    security threshold that differs per value, in both directions, is not the
+    threshold anyone reviewed.
+    """
+    from math import ceil
+
+    from tipguard.canonicalization.llm_canonicalizer import (
+        MIN_DISCLOSED_SHARE,
+        MIN_PARTIAL_VALUE,
+    )
+    from tipguard.matching import squash
+
+    for policy in _shipped_policies().policies:
+        for value in policy.protected_values:
+            squashed = squash(value)
+            if len(squashed) < MIN_PARTIAL_VALUE:
+                continue
+            run = ceil(len(squashed) * MIN_DISCLOSED_SHARE)
+            effective = run / len(squashed)
+            # At or just above the advertised share -- never below it, and
+            # never more than one character's worth above.
+            assert effective >= MIN_DISCLOSED_SHARE
+            assert effective < MIN_DISCLOSED_SHARE + 1 / len(squashed) + 1e-9
+
+
+@pytest.mark.parametrize("value_index", range(8))
+def test_every_shipped_value_behaves_at_its_boundary(value_index: int) -> None:
+    # Behaviour, not arithmetic: 80% of each value is flagged and 50% is not.
+    from tipguard.canonicalization.llm_canonicalizer import (
+        CanonJudgement,
+        _leaks_across_fields,
+    )
+
+    policies = _shipped_policies()
+    values = [v for p in policies.policies for v in p.protected_values]
+    value = values[value_index]
+    protected = tuple(values)
+
+    def judged(share: float) -> bool:
+        return _leaks_across_fields(
+            CanonJudgement(
+                contains_transformation=True,
+                transformation=None,
+                reconstructed_intent=f"saw {value[: int(len(value) * share)]}",
+                requested_action="y",
+                entities=[],
+                policy_categories=["none"],
+                confidence=0.5,
+                uncertainties=[],
+            ),
+            protected,
+        )
+
+    assert judged(0.80), f"80% of {value!r} was not flagged"
+    assert not judged(0.50), f"50% of {value!r} was flagged"
