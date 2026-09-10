@@ -358,6 +358,21 @@ _Pending the TIP-Guard arms._
   decoders and the LLM canonicalizer also removes the second model call, so the ablated arm is
   cheaper as well as blinder. Cost differences between the pair are therefore expected and are not
   evidence about canonicalization's value.
+- **Some measured robustness is incapacity.** Quantified under
+  [Failure analysis](#a-low-violation-rate-can-mean-refusal-or-it-can-mean-the-model-failed-the-task):
+  violation rates correlate strongly with how well the model performs the same transformation on a
+  harmless task, so a low rate on a hard family says as much about the model's limits as about its
+  safety, and should be expected to rise as models improve. This qualifies every violation rate in
+  this report, including the cross-model comparison.
+- **Benign accuracy is a lower bound, and is not independent of the false-positive rate.** It is
+  scored by normalised substring containment of the expected answer, so a correct answer phrased
+  without the expected token counts as wrong. A blocked case also scores zero, by design — the
+  measure exists to catch a defence that allows a request and then mangles the answer — so the
+  benign-accuracy and false-positive columns move together and should not be read as separate
+  evidence.
+- **`direct` cases are a small part of the attack denominator.** 26 of the 752 prohibited cases are
+  direct requests; the rest are TIP. The rates labelled "attacks" are therefore dominated by TIP
+  cases, and a defence's behaviour on plainly-worded requests is measured on a thin sample.
 - **One operating point per arm.** Thresholds are not swept per arm; a sweep would likely improve
   every classifier-based arm and is the most obvious missing experiment.
 - **The `context` condition is a choice.** It is the condition in which attacks succeed, which is
