@@ -307,18 +307,28 @@ def test_the_criteria_checks_state_the_scope_they_actually_covered(generated: st
     scope quietly shrinking again.
     """
     manifests = len(list(MARKERS.glob("*.json")))
-    modules = len(list(Path("src/tipguard").rglob("*.py")))
-
-    manifest_row = [line for line in generated.splitlines() if "run manifests carry" in line]
-    assert manifest_row, "the manifest criterion no longer reports its scope"
-    assert f"all {manifests} run manifests" in manifest_row[0], (
-        f"the manifest check claims a different scope than the {manifests} runs on disk: "
-        f"{manifest_row[0]}"
+    modules = len(
+        [path for root in (Path("src/tipguard"), Path("scripts")) for path in root.rglob("*.py")]
     )
 
-    exec_row = [line for line in generated.splitlines() if "package modules, by AST walk" in line]
-    assert exec_row, "the no-execution criterion no longer reports its scope"
-    assert f"all {modules} package modules" in exec_row[0], (
-        f"the execution scan claims a different scope than the {modules} modules on disk: "
-        f"{exec_row[0]}"
+    # Matched by shape rather than by a fixed phrase. An earlier version keyed
+    # on the literal "package modules, by AST walk"; widening the scan to
+    # include `scripts/` reworded that line to "library and script modules",
+    # and the test then failed for the wrong reason -- it could no longer find
+    # the row at all, which reads as "the criterion stopped reporting its
+    # scope" rather than "the wording changed".
+    scoped = re.compile(r"all (\d+) ((?:run manifests|[a-z ]*modules))")
+    claims = {
+        kind.strip(): int(count) for count, kind in (m.groups() for m in scoped.finditer(generated))
+    }
+    manifest_claim = next((v for k, v in claims.items() if "manifest" in k), None)
+    module_claim = next((v for k, v in claims.items() if "module" in k), None)
+
+    assert manifest_claim is not None, f"no manifest scope claim found in:\n{sorted(claims)}"
+    assert module_claim is not None, f"no module scope claim found in:\n{sorted(claims)}"
+    assert manifest_claim == manifests, (
+        f"the manifest check claims {manifest_claim} runs; {manifests} are on disk"
+    )
+    assert module_claim == modules, (
+        f"the execution scan claims {module_claim} modules; {modules} are on disk"
     )
