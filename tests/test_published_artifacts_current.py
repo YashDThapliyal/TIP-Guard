@@ -428,14 +428,26 @@ COLD_WORDS = frozenset({"cold", "reproduc", "from scratch"})
 #: "$6.0", so a false claim in either form passed unread.
 _MONEY = re.compile(r"\$\s?(\d+(?:\.\d+)?)")
 
-#: Money written without a `$`. Costs must carry the sign so `_MONEY` reads
-#: them and can check them against the artifacts, so every other spelling is
-#: refused rather than parsed.
+#: Money written with any marker other than `$`. Costs must carry the dollar
+#: sign so `_MONEY` reads them and can check them against the artifacts, so a
+#: figure carrying some other currency marker is refused rather than parsed.
 #:
-#: The token before the unit is `\S+`, not `[a-z]+`. Requiring letters caught
-#: "twenty dollars" and missed "20 dollars" and "6.06 dollars", which is the
-#: same claim in the form a report is more likely to use.
-_UNSIGNED_MONEY = re.compile(r"\b(\S+)\s+(?:dollars?|USD)\b", re.IGNORECASE)
+#: The token before a unit word is `\S+`, not `[a-z]+`. Requiring letters
+#: caught "twenty dollars" and missed "20 dollars" and "6.06 dollars", which
+#: is the same claim in the form a report is more likely to use.
+#:
+#: What this cannot do, despite an earlier comment here claiming it enforced
+#: "every cost carries a $": catch a bare number described as a cost in prose.
+#: "The study cost about 20 in API time" has no marker to key on, and no
+#: regex distinguishes that 20 from any other number on the page. The rule
+#: this enforces is narrower than it sounds -- an amount tagged with a
+#: non-dollar currency fails -- and the honest statement of the limit belongs
+#: here rather than in a comment overstating the guarantee.
+_NON_DOLLAR_MONEY = re.compile(
+    r"\b(\S+)\s+(?:dollars?|cents?|USD|pounds?|GBP|euros?|EUR|yen|JPY)\b|"
+    r"([\u00a3\u20ac\u00a5]\s?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 
 
 #: A figure's claim is the sentence it sits in. A fixed character window is
@@ -526,8 +538,8 @@ def test_the_readme_states_both_costs_correctly() -> None:
         f"nor the billed spend (${billed:.2f}): {unexplained}"
     )
 
-    unsigned = _UNSIGNED_MONEY.findall(text)
-    assert not unsigned, (
-        f"the README states a cost without a $ sign: {sorted(set(unsigned))}. Costs must be "
+    tagged = {match for group in _NON_DOLLAR_MONEY.findall(text) for match in group if match}
+    assert not tagged, (
+        f"the README states a cost with a non-dollar marker: {sorted(tagged)}. Costs must be "
         "written as $N so they can be checked against the artifacts."
     )
