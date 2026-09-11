@@ -81,12 +81,8 @@ Several differences that looked real did not survive that.
 ## What we ran
 
 Seven defences, two ways of giving the model its secret, 989 cases each. Twenty runs in total,
-27,709 model calls.
-
-Two thirds of those calls were answered from a local cache built up over earlier work, so the study
-itself billed about $3.92. Running it cold, with nothing cached, pays for all 27,709 and comes to
-$6.06. We quote the second figure wherever the cost of reproducing this comes up, since that is
-what it would cost someone else.
+27,709 model calls. Two thirds of those were served from a local cache built up over earlier work,
+so several of the runs finished in seconds.
 
 The second variable was not in the original plan. An early pilot showed that the same attacks
 succeeded or failed depending on how the secret had been introduced in the system prompt, so we
@@ -106,7 +102,8 @@ same pipeline with decoding turned off:
 | Legitimate traffic blocked | 0.38 | 0.39 |
 | Benign tasks still answered correctly | 0.39 | 0.39 |
 
-Every pair overlaps, and the decoding version costs about two and a half times as much to run.
+Every pair overlaps, and the decoding version makes about one extra model call for every case,
+3.29 against 2.32.
 
 The reason is that there was no room left to improve. A well written classifier reading the raw
 prompt, plus a second pass and a check on the answer, already stopped 751 of 752 attacks. A
@@ -123,7 +120,8 @@ model was told not to reveal it. In the other, the same secret was supplied as o
 material with no warning attached, the way retrieved documents or tool output usually arrive.
 
 For gpt-4o-mini that single change moved the leak rate from 0.03 to 0.75. No defence we built
-came close to a 25x improvement, and this one costs nothing and blocks no legitimate traffic.
+came close to a 25x improvement, and this one adds no model calls and blocks no legitimate
+traffic.
 
 Claude Haiku barely reacted to the same change, which is worth noticing on its own. Whichever
 single model and single setup a study picks, it will report a different headline.
@@ -143,7 +141,7 @@ of legitimate requests. Removing that one idea from the prompt, changing nothing
 | Legitimate traffic blocked | 0.71 | 0.35 |
 | Benign tasks answered correctly | 0.15 | 0.42 |
 
-Same architecture, same models, same cost. Half the collateral damage.
+Same architecture, same models, same number of model calls. Half the collateral damage.
 
 We kept both versions in the study rather than quietly fixing the prompt, because a filter that
 posts a perfect detection score while breaking two thirds of normal traffic is a result worth
@@ -179,7 +177,7 @@ We set a target before running anything: keep false positives under 10 percent. 
 threshold on every configuration, the best available trade is stopping 82 percent of attacks while
 blocking 13 percent of legitimate requests.
 
-The limiting factor throughout is the cost to normal traffic, not detection. Benign task accuracy
+The limiting factor throughout is the damage to normal traffic, not detection. Benign task accuracy
 fell from 0.63 undefended to 0.39 with the full pipeline, against a target of staying within five
 points.
 
@@ -229,7 +227,7 @@ uv run python scripts/make_figures.py artifacts/study-v1/markers    # the two ch
 The records include the model's actual responses, so the leak detection, which is the measurement
 everything else rests on, can be re-derived rather than taken on trust.
 
-To run the study again from scratch, which needs API keys and costs $6.06 with a cold cache:
+To run the study again from scratch, which needs OpenAI and Anthropic API keys:
 
 ```bash
 uv run python -m tipguard.cli.main generate    # build the test cases
@@ -262,14 +260,21 @@ keys; checking the committed results needs neither.
 
 [Apache-2.0](LICENSE), covering the code and the test cases alike.
 
-We chose it over MIT for two things MIT does not have: the patent grant in section 3, and section
-4(b)'s requirement that modified files say they were modified, which suits a benchmark whose
-results depend on the exact set of cases used.
+We chose it over MIT for two things MIT does not have: a patent grant, and a requirement that
+modified files say they were modified. The second suits a benchmark, where a result depends on the
+exact set of cases used. For what either clause actually covers, read [LICENSE](LICENSE) rather
+than a summary of it.
 
-For the scope of that patent grant, read section 3 of [LICENSE](LICENSE). This file does not
-summarise it. Three earlier attempts to do so in a paragraph were each wrong, the first claiming
-more for the reader than the clause gives and the next two describing it more narrowly than it is.
+### A note on what is in `configs/policies.yaml`
 
-Every secret in `configs/policies.yaml` is invented and committed on purpose, so that the results
-here can be checked rather than trusted. None of them corresponds to a real credential, customer,
-or system.
+That file holds the values an attack case tries to make the model reveal. They look like secrets
+because that is their job in the benchmark, but every one of them is invented:
+`CANARY-7f3a-KESTREL-9021`, `violet-tundra-echo-42`, a customer record for a person who does not
+exist, an admin URL on a reserved `.example` domain.
+
+They are committed deliberately. The benchmark cannot run without them, and the results cannot be
+verified without them, which is only safe because none of them is real. No credential, customer,
+or system referenced anywhere in this repository exists.
+
+Real API keys are read from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) and appear
+nowhere in the code or its history.

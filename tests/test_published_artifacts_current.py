@@ -498,57 +498,44 @@ def _spend_from_artifacts() -> tuple[float, float, int]:
     return notional, billed, calls
 
 
-def test_the_readme_states_both_costs_correctly() -> None:
-    """Cost is easy to state wrongly and nothing was checking it.
+def test_the_readme_states_no_costs() -> None:
+    """The README deliberately quotes no prices.
 
-    `cost_usd` is notional, so the total across the artifacts is what a cold
-    reproduction pays, not what this study spent. The README first said the
-    study cost "roughly six dollars", which is the cold figure; the actual
-    spend was lower because two thirds of the calls were cache hits. The same
-    error had already been corrected once in `docs/report.md` and came back in
-    the rewrite, which is why it is now checked rather than proofread.
+    It used to give both the billed and the cold-reproduction figures, and
+    getting them the right way round took several corrections: the study's
+    actual spend and what a fresh run would pay are easy to transpose, and the
+    transposition reads perfectly well. They were removed rather than fixed
+    again, so the rule now is simply that no monetary figure appears.
+
+    The patterns are kept from that earlier work because they are what makes
+    this checkable: `_MONEY` reads any `$` amount, and `_NON_DOLLAR_MONEY`
+    catches the other spellings, including a currency sign after the number,
+    which slipped past an earlier version.
+
+    What this still cannot see is a bare number called a price in prose. That
+    limit has not changed and is not fixable with a pattern.
+    """
+    text = README.read_text(encoding="utf-8")
+
+    signed = _MONEY.findall(text)
+    assert not signed, f"the README quotes a price: {sorted(set(signed))}"
+
+    tagged = {match for group in _NON_DOLLAR_MONEY.findall(text) for match in group if match}
+    assert not tagged, f"the README quotes a price with a currency marker: {sorted(tagged)}"
+
+
+def test_the_report_still_carries_the_costs() -> None:
+    """Removing prices from the README does not remove them from the record.
+
+    Someone deciding whether to reproduce this needs to know what it takes, so
+    the figures stay in the full report and are still checked against the
+    artifacts there.
     """
     if not MARKERS.is_dir():
         pytest.skip(f"no committed artifacts at {MARKERS}")
-    notional, billed, calls = _spend_from_artifacts()
-    text = README.read_text(encoding="utf-8")
-
-    # Presence is not enough: swapping the two figures leaves both on the page
-    # and reproduces the original error inverted, claiming the study cost the
-    # cold figure. So each amount is checked against the words around it.
-    for amount, expected, forbidden, meaning in (
-        (billed, BILLED_WORDS, COLD_WORDS, "what the study actually spent"),
-        (notional, COLD_WORDS, BILLED_WORDS, "what a cold reproduction pays"),
-    ):
-        windows = _sentences_containing(text, f"${amount:.2f}")
-        assert windows, f"the README does not quote ${amount:.2f}, {meaning}"
-        for window in windows:
-            assert any(word in window for word in expected), (
-                f"${amount:.2f} is {meaning}, but the text around it says none of "
-                f"{sorted(expected)}: {window!r}"
-            )
-            assert not any(word in window for word in forbidden), (
-                f"${amount:.2f} is {meaning}, but the text around it claims the opposite "
-                f"by mentioning one of {sorted(forbidden)}: {window!r}"
-            )
-    # Every occurrence, not merely one. The call count appears twice, so an
-    # existence check passed while one of them was edited to 28,000 -- the
-    # same existence-versus-all gap already fixed for the case counts.
-    quoted_calls = {int(m.replace(",", "")) for m in re.findall(r"\b\d{2},\d{3}\b", text)}
-    assert quoted_calls == {calls}, (
-        f"the README quotes call counts {sorted(quoted_calls)}; the artifacts record {calls:,}"
-    )
-
-    # And must not present the cold figure as what the study spent.
-    quoted = {float(m) for m in _MONEY.findall(text)}
-    unexplained = sorted(q for q in quoted if abs(q - notional) > 0.005 and abs(q - billed) > 0.005)
-    assert not unexplained, (
-        f"the README quotes dollar figures that match neither the cold cost (${notional:.2f}) "
-        f"nor the billed spend (${billed:.2f}): {unexplained}"
-    )
-
-    tagged = {match for group in _NON_DOLLAR_MONEY.findall(text) for match in group if match}
-    assert not tagged, (
-        f"the README states a cost with a non-dollar marker: {sorted(tagged)}. Costs must be "
-        "written as $N so they can be checked against the artifacts."
-    )
+    notional, billed, _ = _spend_from_artifacts()
+    text = REPORT.read_text(encoding="utf-8")
+    for amount, meaning in ((notional, "cold reproduction"), (billed, "actual spend")):
+        assert f"${amount:.2f}" in text, (
+            f"the report no longer states the {meaning} figure of ${amount:.2f}"
+        )
