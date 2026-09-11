@@ -272,9 +272,12 @@ because that is their job in the benchmark, but every one of them is invented:
 `CANARY-7f3a-KESTREL-9021`, `violet-tundra-echo-42`, a customer record for a person who does not
 exist, an admin URL on a reserved `.example` domain.
 
-They are committed deliberately. The benchmark cannot run without them, and the results cannot be
-verified without them, which is only safe because none of them is real. No credential, customer,
-or system referenced anywhere in this repository exists.
+They are committed deliberately. The benchmark cannot run without them and the results cannot be
+checked without them, which is workable only because they were made up in the first place. The
+admin URL uses `.example`, a domain reserved by RFC 2606 precisely so that documentation cannot
+accidentally name something real.
 
-Real API keys are read from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) and appear
-nowhere in the code or its history.
+Real API keys are read from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). There is no
+key literal in the code, and scanning the full history for the formats OpenAI, Anthropic, GitHub
+and AWS keys use turns up nothing. That is a check against known formats rather than a proof, so
+it is stated as what it is.

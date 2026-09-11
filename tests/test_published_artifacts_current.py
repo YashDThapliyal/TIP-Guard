@@ -459,6 +459,16 @@ _NON_DOLLAR_MONEY = re.compile(
 )
 
 
+#: Words that discuss price. The README states none, so any of them is a
+#: regression -- whether or not a figure follows. Bounded deliberately: these
+#: are the words that actually appeared in the drafts this replaced.
+_PRICE_LANGUAGE = re.compile(
+    r"\b(?:costs?|costly|cost\w*|expensive|cheap(?:er|est)?|spend\w*|spent|billed|"
+    r"priced?|pricing|budget\w*|afford\w*)\b",
+    re.IGNORECASE,
+)
+
+
 #: A figure's claim is the sentence it sits in. A fixed character window is
 #: too blunt: 160 characters after "$3.92" reaches into the next sentence,
 #: which is about the cold cost, and the check then failed on correct prose.
@@ -522,6 +532,15 @@ def test_the_readme_states_no_costs() -> None:
 
     tagged = {match for group in _NON_DOLLAR_MONEY.findall(text) for match in group if match}
     assert not tagged, f"the README quotes a price with a currency marker: {sorted(tagged)}"
+
+    # Figures are not the whole of it. "the decoding arm costs about twice as
+    # much" and "reproducing this is expensive" carry no numeral and passed
+    # while this test only looked for currency.
+    spoken = sorted({m.group(0) for m in _PRICE_LANGUAGE.finditer(text)})
+    assert not spoken, (
+        f"the README discusses price without quoting one: {spoken}. Say what a defence does in "
+        "model calls, which is checkable, rather than in money, which is not stated here."
+    )
 
 
 def test_the_report_still_carries_the_costs() -> None:
