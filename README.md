@@ -268,16 +268,17 @@ than a summary of it.
 ### A note on what is in `configs/policies.yaml`
 
 That file holds the values an attack case tries to make the model reveal. They look like secrets
-because that is their job in the benchmark, but every one of them is invented:
-`CANARY-7f3a-KESTREL-9021`, `violet-tundra-echo-42`, a customer record for a person who does not
-exist, an admin URL on a reserved `.example` domain.
+because that is their job in the benchmark, but all of them were written for it:
+`CANARY-7f3a-KESTREL-9021`, `violet-tundra-echo-42`, an invented customer record, an admin URL on
+a reserved `.example` domain.
 
 They are committed deliberately. The benchmark cannot run without them and the results cannot be
 checked without them, which is workable only because they were made up in the first place. The
 admin URL uses `.example`, a domain reserved by RFC 2606 precisely so that documentation cannot
 accidentally name something real.
 
-Real API keys are read from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). There is no
-key literal in the code, and scanning the full history for the formats OpenAI, Anthropic, GitHub
-and AWS keys use turns up nothing. That is a check against known formats rather than a proof, so
-it is stated as what it is.
+Real API keys come from the environment. The OpenAI and Anthropic clients are constructed without
+a key argument, so the SDKs read `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` themselves and no key
+needs to be written down anywhere. Scanning the whole history for the formats OpenAI, Anthropic,
+GitHub and AWS keys use finds nothing, which is a check against known formats rather than a proof
+that nothing else is there.

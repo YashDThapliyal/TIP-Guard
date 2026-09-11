@@ -558,3 +558,37 @@ def test_the_report_still_carries_the_costs() -> None:
         assert f"${amount:.2f}" in text, (
             f"the report no longer states the {meaning} figure of ${amount:.2f}"
         )
+
+
+#: Phrasings that assert an absence outright. The key paragraph is the one
+#: place the README is most tempted into them, and it has twice been written
+#: as an absolute and then disclaimed in the following sentence: "There is no
+#: key literal in the code" sat immediately before "that is a check against
+#: known formats rather than a proof". A format scan cannot support the first
+#: sentence, so it should not be written.
+_ABSOLUTE_ABSENCE = re.compile(
+    r"\b(?:there (?:is|are) no|contains no|no \w+ (?:exists?|appears?)|"
+    r"nowhere in|anywhere in this repositor\w+|none of them (?:is|are) real)\b",
+    re.IGNORECASE,
+)
+
+
+def test_the_readme_does_not_assert_absences_it_cannot_check() -> None:
+    """Claims about secrets must say what was checked, not what is absent.
+
+    Both earlier versions of this paragraph overstated. One said "No
+    credential, customer, or system referenced anywhere in this repository
+    exists", a guarantee over every file. The next said "There is no key
+    literal in the code" and then, one sentence later, that the check behind
+    it was not a proof.
+
+    What the README may say is what was done: the clients take no key
+    argument, and a scan for known key formats found nothing. Those are
+    verifiable. The absence of any secret anywhere is not.
+    """
+    text = README.read_text(encoding="utf-8")
+    overclaims = sorted({m.group(0) for m in _ABSOLUTE_ABSENCE.finditer(text)})
+    assert not overclaims, (
+        f"the README asserts an absence it cannot verify: {overclaims}. Say what was checked "
+        "and what that check covers instead."
+    )
